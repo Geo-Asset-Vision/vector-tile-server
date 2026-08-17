@@ -1,0 +1,85 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vector-tile-server
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      APP_PORT: ${APP_PORT:-3000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000/}
+      POSTGIS_HOST: ${POSTGIS_HOST:-db}
+      POSTGIS_PORT: ${POSTGIS_PORT:-5432}
+      POSTGIS_DB: ${POSTGIS_DB:-vtserver}
+      POSTGIS_USER: ${POSTGIS_USER:-vtserver}
+      POSTGIS_PASSWORD: ${POSTGIS_PASSWORD:-vtserver}
+      POSTGIS_SCHEMA: ${POSTGIS_SCHEMA:-public}
+      POSTGIS_MAX_POOL: ${POSTGIS_MAX_POOL:-20}
+      API_KEY: ${API_KEY:-}
+      VALKEY_HOST: ${VALKEY_HOST:-valkey}
+      VALKEY_PORT: ${VALKEY_PORT:-6379}
+      RATE_LIMIT_MAX_ATTEMPTS: ${RATE_LIMIT_MAX_ATTEMPTS:-5}
+      RATE_LIMIT_BASE_BLOCK_SEC: ${RATE_LIMIT_BASE_BLOCK_SEC:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks:
+      - vtserver-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-3000}/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: vector-tile-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGIS_USER:-vtserver}
+      POSTGRES_PASSWORD: ${POSTGIS_PASSWORD:-vtserver}
+      POSTGRES_DB: ${POSTGIS_DB:-vtserver}
+    ports:
+      - "${POSTGIS_PORT:-5434}:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    networks:
+      - vtserver-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGIS_USER:-vtserver} -d ${POSTGIS_DB:-vtserver}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    container_name: vector-tile-valkey
+    restart: unless-stopped
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - valkey_data:/data
+    networks:
+      - vtserver-network
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgis_data:
+    driver: local
+  valkey_data:
+    driver: local
+
+networks:
+  vtserver-network:
+    driver: bridge
