@@ -35,6 +35,9 @@ router.get(
             204: {
                 description: "No content (empty tile)",
             },
+            304: {
+                description: "Not Modified (cached tile matches ETag)",
+            },
             400: {
                 description: "Bad Request (invalid tile coordinates or filter syntax)",
             },

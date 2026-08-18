@@ -5,6 +5,11 @@ import {
 import { findTableGeomLayers } from "@/repositories/catalog.repo";
 import sanitizeWhereParam from "@/libs/sanitized-query";
 import env from "@/libs/env";
+import {
+    buildTileCacheKey,
+    tileCache,
+    datasetVersionProvider,
+} from "@/libs/cache";
 import type {
     SingleTileOptions,
     XYZ,
@@ -24,6 +29,29 @@ export interface GetTileRequestOptions {
     buffer?: number;
     clip?: boolean;
     layerName?: string;
+    bypass?: boolean;
+    tenantId?: string;
+}
+
+export class CatalogNotFoundError extends Error {
+    constructor(catalogId: string) {
+        super(`Spatial catalog item '${catalogId}' not found`);
+        this.name = "CatalogNotFoundError";
+    }
+}
+
+export class InvalidGeomColumnError extends Error {
+    constructor(geom: string, catalogId: string) {
+        super(`Geometry column '${geom}' not found in spatial catalog item '${catalogId}'`);
+        this.name = "InvalidGeomColumnError";
+    }
+}
+
+export class InvalidWhereFilterError extends Error {
+    constructor() {
+        super("Invalid or unauthorized 'where' filter parameter");
+        this.name = "InvalidWhereFilterError";
+    }
 }
 
 export async function getVectorTile(
@@ -68,111 +96,161 @@ export async function getTile(
         tableName = parts.slice(1).join(".");
     }
 
-    const geomLayers = await findTableGeomLayers({ schemaName, tableName });
-    if (!geomLayers || geomLayers.length === 0) {
-        return {
-            ok: false,
-            status: 404,
-            message: `Spatial catalog item '${catalogId}' not found`,
-        };
-    }
+    try {
+        // Retrieve dataset version for deterministic cache key
+        const datasetVersion = await datasetVersionProvider.getVersion(catalogId);
 
-    let targetGeomLayers = geomLayers;
-    if (options.geom) {
-        const found = geomLayers.filter((g) => g.geometry_column === options.geom);
-        if (found.length === 0) {
+        // Build deterministic cache key
+        const cacheKey = buildTileCacheKey({
+            catalogId,
+            datasetVersion,
+            z,
+            x,
+            y,
+            where: options.where,
+            geom: options.geom,
+            properties: options.properties,
+            extent: options.extent,
+            buffer: options.buffer,
+            clip: options.clip,
+            layerName: options.layerName,
+            tenantId: options.tenantId,
+        });
+
+        // Compute function executed only on L1 & L2 cache miss
+        const compute = async (): Promise<Buffer> => {
+            const geomLayers = await findTableGeomLayers({ schemaName, tableName });
+            if (!geomLayers || geomLayers.length === 0) {
+                throw new CatalogNotFoundError(catalogId);
+            }
+
+            let targetGeomLayers = geomLayers;
+            if (options.geom) {
+                const found = geomLayers.filter((g) => g.geometry_column === options.geom);
+                if (found.length === 0) {
+                    throw new InvalidGeomColumnError(options.geom, catalogId);
+                }
+                targetGeomLayers = found;
+            }
+
+            const singleLayerOptionsList: SingleTileOptions[] = [];
+
+            for (const geomLayer of targetGeomLayers) {
+                const geomColumn = geomLayer.geometry_column;
+                const srid = geomLayer.srid || 4326;
+                const layerFields = geomLayer.fields || {};
+
+                const allowedFields = new Set<string>();
+                for (const key of Object.keys(layerFields)) {
+                    allowedFields.add(key);
+                    allowedFields.add(key.toLowerCase());
+                }
+                if (geomColumn) {
+                    allowedFields.add(geomColumn);
+                    allowedFields.add(geomColumn.toLowerCase());
+                }
+
+                let sanitizedWhereSql: string | undefined = undefined;
+                if (options.where && options.where.trim().length > 0) {
+                    const sanitized = sanitizeWhereParam(options.where, {
+                        allowedFields,
+                        fieldTypes: layerFields,
+                    });
+                    if (sanitized === null) {
+                        throw new InvalidWhereFilterError();
+                    }
+                    sanitizedWhereSql = sanitized;
+                }
+
+                const validFields = new Set(Object.keys(layerFields));
+                const properties =
+                    options.properties && options.properties.length > 0
+                        ? options.properties.filter((p) => validFields.has(p))
+                        : Object.keys(layerFields);
+
+                const layerName = options.layerName
+                    ? targetGeomLayers.length > 1
+                        ? `${options.layerName}_${geomColumn}`
+                        : options.layerName
+                    : geomLayers.length > 1
+                        ? `${tableName}_${geomColumn}`
+                        : tableName;
+
+                singleLayerOptionsList.push({
+                    schema: schemaName,
+                    table: tableName,
+                    geom: geomColumn,
+                    srid: srid,
+                    extent: options.extent ?? 4096,
+                    buffer: options.buffer ?? 64,
+                    clip: options.clip ?? true,
+                    properties,
+                    layerName,
+                    whereSql: sanitizedWhereSql,
+                });
+            }
+
+            const tileBuffers: Buffer[] = [];
+            for (const layerOpt of singleLayerOptionsList) {
+                const buf = await findVectorTileBuffer(layerOpt, { z, x, y });
+                if (buf && buf.length > 0) {
+                    tileBuffers.push(buf);
+                }
+            }
+
+            if (tileBuffers.length === 0) {
+                return Buffer.alloc(0);
+            }
+
+            return Buffer.concat(tileBuffers);
+        };
+
+        const result = await tileCache.getOrCompute(cacheKey, compute, {
+            bypass: options.bypass,
+        });
+
+        const headers: Record<string, string> = {
+            ETag: result.eTag,
+            "X-MVT-Cache": result.source,
+        };
+
+        if (result.isEmpty || result.data.length === 0) {
             return {
                 ok: false,
-                status: 400,
-                message: `Geometry column '${options.geom}' not found in spatial catalog item '${catalogId}'`,
+                status: 204,
+                message: "Empty tile",
+                headers,
             };
         }
-        targetGeomLayers = found;
-    }
-
-    const singleLayerOptionsList: SingleTileOptions[] = [];
-
-    for (const geomLayer of targetGeomLayers) {
-        const geomColumn = geomLayer.geometry_column;
-        const srid = geomLayer.srid || 4326;
-        const layerFields = geomLayer.fields || {};
-
-        const allowedFields = new Set<string>();
-        for (const key of Object.keys(layerFields)) {
-            allowedFields.add(key);
-            allowedFields.add(key.toLowerCase());
-        }
-        if (geomColumn) {
-            allowedFields.add(geomColumn);
-            allowedFields.add(geomColumn.toLowerCase());
-        }
-
-        let sanitizedWhereSql: string | undefined = undefined;
-        if (options.where && options.where.trim().length > 0) {
-            const sanitized = sanitizeWhereParam(options.where, {
-                allowedFields,
-                fieldTypes: layerFields,
-            });
-            if (sanitized === null) {
-                return {
-                    ok: false,
-                    status: 400,
-                    message: "Invalid or unauthorized 'where' filter parameter",
-                };
-            }
-            sanitizedWhereSql = sanitized;
-        }
-
-        const validFields = new Set(Object.keys(layerFields));
-        const properties = options.properties && options.properties.length > 0
-            ? options.properties.filter((p) => validFields.has(p))
-            : Object.keys(layerFields);
-
-        const layerName = options.layerName
-            ? (targetGeomLayers.length > 1 ? `${options.layerName}_${geomColumn}` : options.layerName)
-            : (geomLayers.length > 1 ? `${tableName}_${geomColumn}` : tableName);
-
-        singleLayerOptionsList.push({
-            schema: schemaName,
-            table: tableName,
-            geom: geomColumn,
-            srid: srid,
-            extent: options.extent ?? 4096,
-            buffer: options.buffer ?? 64,
-            clip: options.clip ?? true,
-            properties,
-            layerName,
-            whereSql: sanitizedWhereSql,
-        });
-    }
-
-    try {
-        const tileBuffers: Buffer[] = [];
-        for (const layerOpt of singleLayerOptionsList) {
-            const buf = await findVectorTileBuffer(layerOpt, { z, x, y });
-            if (buf && buf.length > 0) {
-                tileBuffers.push(buf);
-            }
-        }
-
-        if (tileBuffers.length === 0) {
-            return { ok: false, status: 204, message: "Empty tile" };
-        }
-
-        const combinedBuffer = Buffer.concat(tileBuffers);
-        const combinedLayerNames = singleLayerOptionsList.map((l) => l.layerName).join(",");
 
         return {
             ok: true,
-            data: combinedBuffer,
+            data: result.data,
             contentType: "application/vnd.mapbox-vector-tile",
+            headers,
             meta: {
-                bytes: combinedBuffer.length,
-                source: "postgis",
-                layer: combinedLayerNames,
+                bytes: result.data.length,
+                source: result.source,
+                layer: options.layerName ?? tableName,
+                eTag: result.eTag,
             },
         };
     } catch (error: unknown) {
+        if (error instanceof CatalogNotFoundError) {
+            return {
+                ok: false,
+                status: 404,
+                message: error.message,
+            };
+        }
+        if (error instanceof InvalidGeomColumnError || error instanceof InvalidWhereFilterError) {
+            return {
+                ok: false,
+                status: 400,
+                message: error.message,
+            };
+        }
+
         const message = error instanceof Error && error.message ? error.message : "PostGIS tile error";
         return {
             ok: false,

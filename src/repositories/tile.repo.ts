@@ -55,13 +55,18 @@ export async function findVectorTileBuffer(
   const selectColumns = [
     ...attributeColumns,
     `ST_AsMVTGeom(
-          ${geomExpr},
+          ST_Force2D(${geomExpr}),
           bounds.g,
           $${extentParam},
           $${bufferParam},
           $${clipParam}
         ) AS mvtgeom`
   ].join(",\n        ");
+
+  const rawGeomCol = qualifyColumn("src", layer.geom);
+  const bboxFilterExpr = srid === 3857
+    ? "bounds.g"
+    : `ST_Transform(bounds.g, ${srid})`;
 
   const sql = `
       WITH tile_bounds AS (
@@ -75,9 +80,11 @@ export async function findVectorTileBuffer(
               ${selectColumns}
             FROM ${quoteTable(schema, layer.table)} AS src
             CROSS JOIN tile_bounds AS bounds
-            WHERE ${geomExpr} && bounds.g
-            ${whereClause}
+            WHERE ${rawGeomCol} IS NOT NULL
+              AND ${rawGeomCol} && ${bboxFilterExpr}
+              ${whereClause}
           ) AS layer_0
+          WHERE mvtgeom IS NOT NULL
         ),
         ''::bytea
       ) AS tile;

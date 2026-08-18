@@ -18,9 +18,9 @@ export type TileResponse =
         data: Buffer;
         contentType: MimeVectorTile;
         headers?: Record<string, string>;
-        meta?: { bytes?: number; source?: string; layer?: string };
+        meta?: { bytes?: number; source?: string; layer?: string; eTag?: string };
     }
-    | { ok: false; status: number; message?: string };
+    | { ok: false; status: number; message?: string; headers?: Record<string, string> };
 
 export interface SingleTileOptions {
     schema?: string;

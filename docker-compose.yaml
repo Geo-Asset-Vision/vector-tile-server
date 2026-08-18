@@ -1,5 +1,10 @@
 services:
   app:
+    env_file:
+      - path: .env.docker
+        required: false
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: Dockerfile
@@ -20,6 +25,7 @@ services:
       API_KEY: ${API_KEY:-}
       VALKEY_HOST: ${VALKEY_HOST:-valkey}
       VALKEY_PORT: ${VALKEY_PORT:-6379}
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
       RATE_LIMIT_MAX_ATTEMPTS: ${RATE_LIMIT_MAX_ATTEMPTS:-5}
       RATE_LIMIT_BASE_BLOCK_SEC: ${RATE_LIMIT_BASE_BLOCK_SEC:-60}
     depends_on:
@@ -37,6 +43,12 @@ services:
       start_period: 10s
 
   db:
+    env_file:
+      - path: .env.docker
+        required: false
+      - path: .env
+        required: false
+    platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
     image: postgis/postgis:16-3.4-alpine
     container_name: vector-tile-db
     restart: unless-stopped
@@ -58,9 +70,22 @@ services:
       start_period: 5s
 
   valkey:
+    env_file:
+      - path: .env.docker
+        required: false
+      - path: .env
+        required: false
     image: valkey/valkey:8.0-alpine
     container_name: vector-tile-valkey
     restart: unless-stopped
+    command: >
+      sh -c '
+        if [ -n "$$VALKEY_PASSWORD" ]; then
+          exec valkey-server --requirepass "$$VALKEY_PASSWORD"
+        else
+          exec valkey-server
+        fi
+      '
     ports:
       - "${VALKEY_PORT:-6379}:6379"
     volumes:
@@ -68,7 +93,7 @@ services:
     networks:
       - vtserver-network
     healthcheck:
-      test: ["CMD-SHELL", "valkey-cli ping || exit 1"]
+      test: ["CMD-SHELL", "sh -c 'if [ -n \"$$VALKEY_PASSWORD\" ]; then valkey-cli -a \"$$VALKEY_PASSWORD\" ping; else valkey-cli ping; fi' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

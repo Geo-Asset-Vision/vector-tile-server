@@ -1,10 +1,13 @@
 import env from '@/libs/env'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { openAPIRouteHandler } from 'hono-openapi'
+import { openAPIRouteHandler, generateSpecs } from 'hono-openapi'
 import { Scalar } from '@scalar/hono-api-reference'
+import { createMarkdownFromOpenApi } from '@scalar/openapi-to-markdown'
 import { logger } from 'hono/logger'
 import { disconnect, checkConnection } from '@/libs/db'
+import { rateLimiter } from '@/libs/rate-limiter'
+import { tileCache } from '@/libs/cache'
 import { cors } from 'hono/cors'
 import appRouter from '@/routes'
 
@@ -24,29 +27,56 @@ const app = new Hono()
 app.use(logger())
 app.use('*', cors())
 app.get('/', (c) => {
-  return c.text(`Vector Tile Server is running. Visit ${env.APP_BASE_URL}/docs for more information.`)
+  return c.text(`Vector Tile Server is running. Visit ${env.APP_BASE_URL}/docs for API docs or ${env.APP_BASE_URL}/llms.txt for LLMs.`)
 })
 
 app.route('/', appRouter)
 
-app.get('/openapi', openAPIRouteHandler(app, {
+const openApiDocConfig = {
   documentation: {
+    info: {
+      title: 'Vector Tile Server API',
+      version: '1.0.0',
+      description: 'High-performance PostGIS-backed Vector Tile Server API',
+    },
+    servers: [
+      {
+        url: env.APP_BASE_URL,
+        description: 'Current Environment URL',
+      },
+    ],
     components: {
       securitySchemes: {
         API_KEY: {
-          type: 'apiKey',
-          in: 'header',
+          type: 'apiKey' as const,
+          in: 'header' as const,
           name: 'X-API-Key',
         }
       }
     }
   }
-}))
+}
+
+app.get('/openapi', openAPIRouteHandler(app, openApiDocConfig))
 
 app.get('/docs', Scalar({
-  url: '/openapi',
+  url: `${env.APP_BASE_URL}/openapi`,
   theme: "alternate"
 }));
+
+let cachedMarkdown: string | null = null;
+/**
+ * Register route to serve API Reference Markdown for LLMs (llms.txt standard)
+ * @see https://llmstxt.org/
+ * @see https://scalar.com/products/api-references/integrations/hono#markdown-for-llms
+ */
+app.get('/llms.txt', async (c) => {
+  if (!cachedMarkdown) {
+    const specs = await generateSpecs(app, openApiDocConfig, c);
+    cachedMarkdown = await createMarkdownFromOpenApi(specs);
+  }
+  return c.text(cachedMarkdown);
+});
 
 app.onError((err, c) => {
   console.error(`${err}`)
@@ -73,9 +103,9 @@ process.on('SIGTERM', async () => {
   console.log('Closing HTTP server...');
   server.close();
   console.log('HTTP server closed');
-  console.log('Closing database pool...');
-  await disconnect();
-  console.log('Database pool closed');
+  console.log('Closing database pool & cache...');
+  await Promise.allSettled([disconnect(), rateLimiter.disconnect(), tileCache.disconnect()]);
+  console.log('Database pool and cache connections closed');
   console.log('Process exiting...');
   process.exit(0);
 });
@@ -85,9 +115,9 @@ process.on('SIGINT', async () => {
   console.log('Closing HTTP server...');
   server.close();
   console.log('HTTP server closed');
-  console.log('Closing database pool...');
-  await disconnect();
-  console.log('Database pool closed');
+  console.log('Closing database pool & cache...');
+  await Promise.allSettled([disconnect(), rateLimiter.disconnect(), tileCache.disconnect()]);
+  console.log('Database pool and cache connections closed');
   console.log('Process exiting...');
   process.exit(0);
 });

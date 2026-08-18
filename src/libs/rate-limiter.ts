@@ -223,6 +223,12 @@ export class UnauthorizedRateLimiter {
     async recordSuccess(ip: string): Promise<void> {
         await this.store.reset(ip);
     }
+
+    async disconnect(): Promise<void> {
+        if (this.store instanceof ValkeyRateLimitStore) {
+            await this.store.disconnect();
+        }
+    }
 }
 
 export const rateLimiter = new UnauthorizedRateLimiter();
