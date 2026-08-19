@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import catalogRoute from "./catalog.route";
 import tileRoute from "./tiles.route";
+import { createMcpRoutes } from "@/mcp/routes";
 import { cacheMetrics } from "@/libs/cache";
 
 const routes = new Hono();
 
 routes.route('/catalog', catalogRoute);
 routes.route('/tiles', tileRoute);
+routes.route('/mcp', createMcpRoutes());
 
 routes.get('/metrics', (c) => {
     const accept = c.req.header('Accept');

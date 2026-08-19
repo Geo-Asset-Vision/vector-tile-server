@@ -7,6 +7,13 @@
         "serve",
         "--mcp"
       ]
+    },
+    "vector-tile-server": {
+      "type": "stdio",
+      "command": "pnpm",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
 import appRouter from "../src/routes/index";
 import env from "../src/libs/env";
-import { tileCache } from "../src/libs/cache";
+import { tileCache, datasetVersionProvider } from "../src/libs/cache";
 import * as tileRepo from "../src/repositories/tile.repo";
 import * as catalogRepo from "../src/repositories/catalog.repo";
 
@@ -10,8 +10,14 @@ describe("Tile Cache End-to-End Route Tests", () => {
     const app = new Hono();
     app.route("/", appRouter);
 
-    beforeEach(() => {
+    beforeEach(async () => {
         tileCache.l1Cache.clear();
+        await datasetVersionProvider.bumpVersion("buildings");
+        await datasetVersionProvider.bumpVersion("public.buildings");
+        await datasetVersionProvider.bumpVersion("roads");
+        await datasetVersionProvider.bumpVersion("public.roads");
+        await datasetVersionProvider.bumpVersion("parcels");
+        await datasetVersionProvider.bumpVersion("public.parcels");
         env.API_KEY = "";
     });
 

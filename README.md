@@ -228,3 +228,165 @@ server {
 
 > [!TIP]
 > Setting `APP_BASE_URL` ensures that TileJSON metadata (`"tiles": ["https://yourdomain.com/gis/tiles/..."]`), OpenAPI schemas, and Scalar API docs at `/gis/docs` resolve all paths accurately across subpaths and subdomains.
+
+---
+
+## Model Context Protocol (MCP) Server
+
+Vector Tile Server includes a built-in **MCP (Model Context Protocol) Server** supporting both **SSE / HTTP Stream Transport** and **Stdio Transport**. This allows AI Assistants (Cursor, Claude Desktop, Antigravity) and external AI Agent frameworks (such as **Mastra** or **GeoLibre**) to directly discover spatial layers, perform sanitized spatial queries, inspect binary MVT tiles, generate MapLibre styles, and manage tile cache.
+
+### Available MCP Tools
+
+| Tool Name | Description |
+| :--- | :--- |
+| `list_spatial_catalogs` | Discovers all PostGIS tables, views, and geometry layers. |
+| `get_catalog_schema` | Inspects columns, data types, SRID, and table descriptions. |
+| `get_tilejson` | Retrieves TileJSON 3.0.0 metadata with calculated bounds & center. |
+| `latlon_to_tile` | Converts `(lat, lon, zoom)` to XYZ tile coordinates. |
+| `tile_to_bbox` | Converts XYZ tile coordinates to WGS84 bounding box `[minLon, minLat, maxLon, maxLat]`. |
+| `query_layer_features` | Queries spatial features with Pratt-sanitized WHERE filter returning GeoJSON. |
+| `get_attribute_statistics` | Computes column stats & distinct values for styling and filtering. |
+| `inspect_mvt_tile` | Decodes binary `.mvt` / `.pbf` tiles to inspect layers, feature counts, and geometry types. |
+| `generate_tile_url` | Generates XYZ template URLs with optional WHERE filters and auth guidance. |
+| `generate_maplibre_style` | Generates MapLibre GL JS / GeoLibre layer style JSON (fill, line, circle). |
+| `export_geolibre_config` | Generates ready-to-import configuration for GeoLibre workspace. |
+| `get_cache_and_server_metrics` | Returns L1/L2 cache hit ratios, memory, Valkey status, and Prometheus metrics. |
+| `purge_layer_cache` | Invalidates cached vector tiles by bumping dataset version and clearing L1 LRU. |
+
+### Authentication & Security (API Key)
+
+When `API_KEY` is configured in your `.env` file, all MCP SSE endpoints (`/mcp/sse` and `/mcp/messages`) are protected with rate-limiting and authentication.
+
+You can authenticate using any of the following methods:
+1. **Query Parameter**: `?apiKey=<YOUR_API_KEY>` or `?api_key=<YOUR_API_KEY>` *(Recommended for browser EventSource / MCP Inspector)*.
+2. **Header `X-API-Key`**: `X-API-Key: <YOUR_API_KEY>`.
+3. **Header `Authorization`**: `Authorization: Bearer <YOUR_API_KEY>`.
+
+---
+
+### Testing MCP with UI (MCP Inspector)
+
+The official **MCP Inspector** tool provides a web UI to test and inspect all tools interactively:
+
+```bash
+# Important: Always wrap the URL in quotes in zsh/bash to prevent globbing the `?` query character
+npx @modelcontextprotocol/inspector "http://localhost:3000/mcp/sse?apiKey=YOUR_API_KEY"
+```
+
+Or test with custom headers via cURL:
+```bash
+# Test SSE stream handshake
+curl -N -i -H "X-API-Key: YOUR_API_KEY" http://localhost:3000/mcp/sse
+
+# Or via query parameter
+curl -N -i "http://localhost:3000/mcp/sse?apiKey=YOUR_API_KEY"
+```
+
+---
+
+### Connecting External Mastra Project (SSE Transport)
+
+In your external **Mastra** project, connect via `@mastra/mcp`:
+
+```typescript
+import { MCPClient } from "@mastra/mcp";
+import { Agent } from "@mastra/core/agent";
+
+export const mcpClient = new MCPClient({
+  id: "vector-tile-client",
+  servers: {
+    vectorTileServer: {
+      // Option A: Via URL Query Parameter (Recommended)
+      url: new URL("http://localhost:3000/mcp/sse?apiKey=" + process.env.VECTOR_TILE_API_KEY),
+
+      // Option B: Via Custom Headers
+      // url: new URL("http://localhost:3000/mcp/sse"),
+      // headers: {
+      //   "X-API-Key": process.env.VECTOR_TILE_API_KEY,
+      // },
+    },
+  },
+});
+
+export async function getGisAgent() {
+  const tools = await mcpClient.getTools();
+  return new Agent({
+    name: "GIS Analyst",
+    instructions: "You are a GIS assistant analyzing PostGIS spatial layers and vector tiles...",
+    tools: { ...tools },
+  });
+}
+```
+
+---
+
+### Running MCP Locally via Stdio (Cursor / Claude Desktop)
+
+```bash
+# Start MCP server over stdio
+pnpm mcp
+```
+
+Or add to `.cursor/mcp.json` / Claude Desktop config:
+```json
+{
+  "mcpServers": {
+    "vector-tile-server": {
+      "command": "pnpm",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+---
+
+### Multi-Instance & Clustered Deployment (Docker / PM2 / Nginx)
+
+When deploying multiple instances of the server (e.g. `docker compose up --scale app=3`, Kubernetes replicas, or behind an Nginx load balancer):
+
+> [!IMPORTANT]
+> **Sticky Sessions Required for SSE Transport**:
+> The MCP SSE protocol operates via a 2-step lifecycle:
+> 1. `GET /mcp/sse` establishes the event stream and returns an in-memory `sessionId`.
+> 2. `POST /mcp/messages?sessionId=...` delivers tool call commands to that specific session.
+>
+> If you load-balance requests across multiple server instances using pure round-robin, the `POST` request might hit a different worker/container than the one holding the SSE connection in memory (resulting in `404: No active SSE transport session found`).
+
+#### Recommended Nginx Configuration with Sticky Sessions (`ip_hash`)
+
+```nginx
+upstream tile_cluster {
+    ip_hash; # Routes requests from the same client IP to the same worker instance
+    server 127.0.0.1:3000;
+    server 127.0.0.1:3001;
+    server 127.0.0.1:3002;
+}
+
+server {
+    listen 80;
+    server_name tiles.yourdomain.com;
+
+    location / {
+        proxy_pass http://tile_cluster;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # Disable buffering and cache for realtime SSE streaming
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+    }
+}
+```
+
+| Deployment Architecture | MCP SSE Compatibility | Recommendation |
+| :--- | :--- | :--- |
+| **Single Container / Single Process** | ✅ **100% Compatible** | Zero extra setup needed. |
+| **Docker Compose Replicas + Nginx / ALB** | ✅ **100% Compatible** | Enable `ip_hash;` or cookie-based Session Affinity on gateway. |
+| **PM2 Clustered Mode** | ⚠️ **Requires Gateway** | Run individual PM2 fork instances across ports with Nginx `ip_hash`. |
+| **Stdio Subprocess** | ✅ **100% Compatible** | Direct OS stdio pipe, completely isolated from network load balancers. |
+
