@@ -28,7 +28,9 @@ export async function withAPIKey(c: Context, next: Next) {
         }, 429);
     }
 
-    const apiKey = c.req.header("X-API-Key");
+    const authHeader = c.req.header("Authorization");
+    const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const apiKey = c.req.header("X-API-Key") || bearerKey || c.req.query("apiKey") || c.req.query("api_key");
 
     // 2. Validate API Key
     if (!apiKey || apiKey !== env.API_KEY) {

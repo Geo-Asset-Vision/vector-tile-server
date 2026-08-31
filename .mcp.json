@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": [
+        "serve",
+        "--mcp"
+      ]
+    },
+    "vector-tile-server": {
+      "type": "stdio",
+      "command": "pnpm",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

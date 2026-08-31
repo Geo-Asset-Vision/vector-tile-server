@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { getTile } from "@/services/tile.service";
+import env from "@/libs/env";
 
 export async function getTileController(c: Context) {
     const catalogId = c.req.param("catalog_id") || c.req.param("id");
@@ -42,6 +43,7 @@ export async function getTileController(c: Context) {
     const clip = clipRaw !== undefined ? clipRaw === "true" || clipRaw === "1" : undefined;
 
     const layerName = c.req.query("layer") || c.req.query("layerName");
+    const bypass = c.req.query("cache") === "false" || c.req.header("Cache-Control") === "no-cache";
 
     try {
         const result = await getTile({
@@ -56,13 +58,31 @@ export async function getTileController(c: Context) {
             buffer,
             clip,
             layerName,
+            bypass,
         });
+
+        const headers: Record<string, string> = {
+            "Content-Type": "application/vnd.mapbox-vector-tile",
+            "Cache-Control": `public, max-age=${env.MVT_CACHE_L1_TTL_SECONDS}`,
+        };
+
+        if (result.headers?.ETag) {
+            headers["ETag"] = result.headers.ETag;
+        }
+
+        if (env.MVT_CACHE_DEBUG_HEADERS && result.headers?.["X-MVT-Cache"]) {
+            headers["X-MVT-Cache"] = result.headers["X-MVT-Cache"];
+        }
+
+        // Conditional GET handling via If-None-Match
+        const ifNoneMatch = c.req.header("If-None-Match");
+        if (ifNoneMatch && result.headers?.ETag && (ifNoneMatch === result.headers.ETag || ifNoneMatch === "*")) {
+            return c.body(null, 304, headers);
+        }
 
         if (!result.ok) {
             if (result.status === 204) {
-                return c.body(null, 204, {
-                    "Content-Type": "application/vnd.mapbox-vector-tile",
-                });
+                return c.body(null, 204, headers);
             }
             return c.json(
                 { error: result.message || "Tile error" },
@@ -71,9 +91,8 @@ export async function getTileController(c: Context) {
         }
 
         return c.body(new Uint8Array(result.data), 200, {
+            ...headers,
             "Content-Type": result.contentType,
-            "Cache-Control": "public, max-age=3600",
-            ...result.headers,
         });
     } catch (e) {
         console.error(e);
