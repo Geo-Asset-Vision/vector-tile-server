@@ -6,7 +6,7 @@ services:
     container_name: vector-tile-server
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-4000}:3000"
+      - "${APP_PORT:-4000}:${APP_PORT:-4000}"
     environment:
       APP_PORT: ${APP_PORT:-4000}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:4000/}
