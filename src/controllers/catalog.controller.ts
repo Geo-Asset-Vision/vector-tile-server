@@ -26,7 +26,7 @@ export async function getTileJSON(c: Context) {
         return c.json(result);
     } catch (e) {
         if (e instanceof Error) {
-            if (e.message === "INVALID_WHERE_PARAM") {
+            if (e.message === "INVALID_WHERE_PARAM" || e.message === "WHERE_TOO_LONG") {
                 return c.json({ error: "Invalid or unauthorized 'where' filter parameter" }, 400);
             }
             if (e.message === "CATALOG_NOT_FOUND") {

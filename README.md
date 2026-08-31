@@ -54,3 +54,11 @@ docker compose up --build -d
 # View logs
 docker compose logs -f app
 ```
+
+## Map hardening (Wave 2A)
+
+- **Allowlists** (`ALLOWED_SCHEMAS`, `ALLOWED_CATALOGS`): unauthorized schema/catalog discovery, TileJSON detail, and tiles return 404 (no catalog enumeration). Empty = all allowed (baseline).
+- **Stable feature IDs** (`STABLE_ID_COLUMNS`): explicit `catalog:column` mapping first, single-column primary key fallback, never `ctid`. TileJSON carries `featureIdProperty`/`highlightSupported`; MVT sets the external feature id from that column and removes it from properties.
+- **`where`** uses the existing sanitizer; max 1000 chars.
+- **CORS** locked to `CORS_ALLOWED_ORIGINS` or rejected for cross-origin browser reads. Cache/security headers set.
+- Decoded-MVT integration test: `RUN_VT_INTEGRATION=1 pnpm test tests/mvt-feature-id.integration.test.ts` (needs live PostGIS sample DB).

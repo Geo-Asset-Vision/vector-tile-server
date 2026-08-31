@@ -6,6 +6,7 @@ import {
   buildGeomExpression,
   appendWhereClause,
   qualifyColumn,
+  quoteIdentifier,
   quoteTable,
 } from "@/libs/tile";
 
@@ -38,13 +39,13 @@ export async function findVectorTileBuffer(
   const addedProps = new Set<string>();
 
   if (layer.idColumn) {
-    attributeColumns.push(qualifyColumn("src", layer.idColumn));
+    attributeColumns.push(`${qualifyColumn("src", layer.idColumn)} AS ${quoteIdentifier(layer.idColumn)}`);
     addedProps.add(layer.idColumn);
   }
   if (layer.properties?.length) {
     for (const prop of layer.properties) {
       if (!addedProps.has(prop)) {
-        attributeColumns.push(qualifyColumn("src", prop));
+        attributeColumns.push(`${qualifyColumn("src", prop)} AS ${quoteIdentifier(prop)}`);
         addedProps.add(prop);
       }
     }
@@ -69,7 +70,7 @@ export async function findVectorTileBuffer(
       )
       SELECT COALESCE(
         (
-          SELECT ST_AsMVT(layer_0, $${layerNameParam}, $${extentParam}, 'mvtgeom')
+          SELECT ST_AsMVT(layer_0, $${layerNameParam}, $${extentParam}, 'mvtgeom'${layer.idColumn ? `, '${layer.idColumn.replace(/'/g, "''")}'` : ''})
           FROM (
             SELECT
               ${selectColumns}

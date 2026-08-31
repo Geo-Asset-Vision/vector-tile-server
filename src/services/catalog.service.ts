@@ -4,6 +4,7 @@ import { findAllGeomObject, findTableGeomLayers } from "@/repositories/catalog.r
 import type { TListCatalogItemSchema, TTileJSONSchema, TVectorLayer } from "@/schema";
 import { getTileBounds } from "@/services/tile.service";
 import sanitizeWhereParam from "@/libs/sanitized-query";
+import { assertWhereLength, explicitStableId, isCatalogAllowed, parseCatalogId } from "@/libs/map-config";
 
 export interface GetTileJSONOptions {
     where?: string;
@@ -11,9 +12,11 @@ export interface GetTileJSONOptions {
 
 export async function discoverCatalog(schemaName?: string): Promise<TListCatalogItemSchema> {
     try {
-        const rows = await findAllGeomObject({ schemaName: schemaName || env.POSTGIS_SCHEMA });
+        const requestedSchema = schemaName || env.POSTGIS_SCHEMA;
+        if (requestedSchema && !isCatalogAllowed(requestedSchema)) return [];
+        const rows = await findAllGeomObject({ schemaName: requestedSchema });
 
-        return rows.map(row => ({
+        return rows.filter((row) => isCatalogAllowed(row.schema_name, row.name)).map(row => ({
             id: `${row.schema_name}.${row.name}`,
             type: row.type,
             geometry_columns: row.geometry_columns,
@@ -29,14 +32,9 @@ export async function getTileJSONDetail(
     options?: GetTileJSONOptions
 ): Promise<TTileJSONSchema> {
     try {
-        let schemaName = env.POSTGIS_SCHEMA || "public";
-        let tableName = catalogId;
-
-        if (catalogId.includes(".")) {
-            const parts = catalogId.split(".");
-            schemaName = parts[0];
-            tableName = parts.slice(1).join(".");
-        }
+        const { schemaName, tableName } = parseCatalogId(catalogId, env.POSTGIS_SCHEMA || "public");
+        if (!isCatalogAllowed(schemaName, tableName)) throw new Error("CATALOG_NOT_FOUND");
+        assertWhereLength(options?.where);
 
         const geomLayers = await findTableGeomLayers({ schemaName, tableName });
         if (!geomLayers || geomLayers.length === 0) {
@@ -75,10 +73,15 @@ export async function getTileJSONDetail(
             sanitizedWhere = sanitized;
         }
 
-        let tilesUrl = `${env.APP_BASE_URL}/tiles/${catalogId}/{z}/{x}/{y}`;
+        const tileBaseUrl = (env.PUBLIC_TILE_BASE_URL || env.APP_BASE_URL).replace(/\/$/, "");
+        let tilesUrl = `${tileBaseUrl}/tiles/${catalogId}/{z}/{x}/{y}`;
         if (rawWhereParam) {
             tilesUrl += `?where=${encodeURIComponent(rawWhereParam)}`;
         }
+
+        const explicitId = explicitStableId(schemaName, tableName);
+        const pkCols = geomLayers[0]?.primary_key_columns ?? [];
+        const featureIdProperty = explicitId || (pkCols.length === 1 ? pkCols[0] : undefined);
 
         const vectorLayers: TVectorLayer[] = geomLayers.map((layer, _, arr) => {
             const layerId = arr.length > 1
@@ -101,7 +104,9 @@ export async function getTileJSONDetail(
                 description: layerDescription,
                 minzoom: 0,
                 maxzoom: 22,
-                fields,
+                fields: featureIdProperty && !fields[featureIdProperty] ? { ...fields, [featureIdProperty]: "String" } : fields,
+                featureIdProperty,
+                highlightSupported: Boolean(featureIdProperty),
             };
         });
 
@@ -155,9 +160,11 @@ export async function getTileJSONDetail(
             center,
             tiles: [tilesUrl],
             vector_layers: vectorLayers,
+            featureIdProperty,
+            highlightSupported: Boolean(featureIdProperty),
         };
     } catch (e) {
-        if (e instanceof Error && (e.message === "INVALID_WHERE_PARAM" || e.message === "CATALOG_NOT_FOUND")) {
+        if (e instanceof Error && (e.message === "INVALID_WHERE_PARAM" || e.message === "WHERE_TOO_LONG" || e.message === "CATALOG_NOT_FOUND")) {
             throw e;
         }
         console.error(e);

@@ -11,6 +11,7 @@ import type {
     BBox,
     TileResponse,
 } from "@/libs/tile";
+import { assertWhereLength, explicitStableId, isCatalogAllowed, parseCatalogId } from "@/libs/map-config";
 
 export interface GetTileRequestOptions {
     catalogId: string;
@@ -59,13 +60,18 @@ export async function getTile(
 ): Promise<TileResponse> {
     const { catalogId, z, x, y } = options;
 
-    let schemaName = env.POSTGIS_SCHEMA || "public";
-    let tableName = catalogId;
-
-    if (catalogId.includes(".")) {
-        const parts = catalogId.split(".");
-        schemaName = parts[0];
-        tableName = parts.slice(1).join(".");
+    const { schemaName, tableName } = parseCatalogId(catalogId, env.POSTGIS_SCHEMA || "public");
+    if (!isCatalogAllowed(schemaName, tableName)) {
+        return {
+            ok: false,
+            status: 404,
+            message: `Spatial catalog item '${catalogId}' not found`,
+        };
+    }
+    try {
+        assertWhereLength(options.where);
+    } catch {
+        return { ok: false, status: 400, message: "Invalid or unauthorized 'where' filter parameter" };
     }
 
     const geomLayers = await findTableGeomLayers({ schemaName, tableName });
@@ -132,6 +138,10 @@ export async function getTile(
             ? (targetGeomLayers.length > 1 ? `${options.layerName}_${geomColumn}` : options.layerName)
             : (geomLayers.length > 1 ? `${tableName}_${geomColumn}` : tableName);
 
+        const explicitId = explicitStableId(schemaName, tableName);
+        const pkCols = geomLayer.primary_key_columns ?? [];
+        const idColumn = explicitId || (pkCols.length === 1 ? pkCols[0] : undefined);
+
         singleLayerOptionsList.push({
             schema: schemaName,
             table: tableName,
@@ -143,6 +153,7 @@ export async function getTile(
             properties,
             layerName,
             whereSql: sanitizedWhereSql,
+            idColumn,
         });
     }
 

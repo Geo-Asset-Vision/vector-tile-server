@@ -21,6 +21,14 @@ const envSchema = z.object({
 
     RATE_LIMIT_MAX_ATTEMPTS: z.string().default('5').transform(Number),
     RATE_LIMIT_BASE_BLOCK_SEC: z.string().default('60').transform(Number),
+
+    // Map hardening (Wave 2A): allowlists + stable feature ID columns.
+    ALLOWED_SCHEMAS: z.string().optional(),
+    ALLOWED_CATALOGS: z.string().optional(),
+    // Format: catalog_id:feature_id_column,catalog2:col
+    STABLE_ID_COLUMNS: z.string().optional(),
+    PUBLIC_TILE_BASE_URL: z.string().optional(),
+    CORS_ALLOWED_ORIGINS: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

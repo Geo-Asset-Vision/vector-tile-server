@@ -27,9 +27,11 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.21.0",
     "oxlint": "^1.78.0",
+    "pbf": "^3.2.1",
     "tsup": "^8.5.1",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2",

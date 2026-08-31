@@ -24,15 +24,17 @@ export const GetCatalogDetailParamsSchema = z.object({
 });
 
 export const GetCatalogDetailQuerySchema = z.object({
-    where: z.string().optional().describe("SQL WHERE clause filter (e.g. status = 'active' AND age > 20)"),
+    where: z.string().max(1000).optional().describe("SQL WHERE clause filter (e.g. status = 'active' AND age > 20)"),
 });
 
 export const VectorLayerSchema = z.object({
     id: z.string(),
     fields: z.record(z.string(), z.string()),
     description: z.string().optional(),
-    minzoom: z.number().int().min(0).max(30).optional(),
-    maxzoom: z.number().int().min(0).max(30).optional(),
+    minzoom: z.number().int().min(0).max(22).optional(),
+    maxzoom: z.number().int().min(0).max(22).optional(),
+    featureIdProperty: z.string().optional(),
+    highlightSupported: z.boolean().optional(),
 });
 
 export const TileJSONSchema = z.object({
@@ -42,12 +44,14 @@ export const TileJSONSchema = z.object({
     version: z.string().optional(),
     attribution: z.string().optional(),
     scheme: z.enum(["xyz", "tms"]).optional(),
-    minzoom: z.number().int().min(0).max(30).optional(),
-    maxzoom: z.number().int().min(0).max(30).optional(),
-    bounds: z.array(z.number()).length(4).optional(),
-    center: z.array(z.number()).length(3).optional(),
+    minzoom: z.number().int().min(0).max(22).optional(),
+    maxzoom: z.number().int().min(0).max(22).optional(),
+    bounds: z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90), z.number().min(-180).max(180), z.number().min(-90).max(90)]).optional(),
+    center: z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90), z.number().int().min(0).max(22)]).optional(),
     tiles: z.array(z.string()),
     vector_layers: z.array(VectorLayerSchema),
+    featureIdProperty: z.string().optional(),
+    highlightSupported: z.boolean().optional(),
 });
 
 export type TListCatalogItemSchema = z.infer<typeof ListCatalogItemSchema>;

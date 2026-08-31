@@ -102,6 +102,7 @@ export interface ITableGeomLayerResult {
     table_description?: string;
     geometry_description?: string;
     fields: Record<string, string>;
+    primary_key_columns?: string[];
 }
 
 export async function findTableGeomLayers(params: IFindVectorLayerParams): Promise<ITableGeomLayerResult[]> {
@@ -120,7 +121,16 @@ export async function findTableGeomLayers(params: IFindVectorLayerParams): Promi
                 format_type(a.atttypid, NULL)
             ) FILTER (WHERE a.attname IS NOT NULL),
             '{}'::jsonb
-        ) AS fields
+        ) AS fields,
+        COALESCE((
+            SELECT jsonb_agg(pa.attname ORDER BY pa.attnum)
+            FROM pg_index i
+            JOIN pg_attribute pa
+              ON pa.attrelid = i.indrelid
+             AND pa.attnum = ANY(i.indkey)
+            WHERE i.indrelid = c.oid
+              AND i.indisprimary
+        ), '[]'::jsonb) AS primary_key_columns
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n
         ON n.oid = c.relnamespace
