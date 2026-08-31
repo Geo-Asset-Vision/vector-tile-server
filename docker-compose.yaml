@@ -6,10 +6,10 @@ services:
     container_name: vector-tile-server
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-4000}:3000"
     environment:
-      APP_PORT: ${APP_PORT:-3000}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000/}
+      APP_PORT: ${APP_PORT:-4000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:4000/}
       # Service-to-service values; host-published .env values do not apply here.
       POSTGIS_HOST: db
       POSTGIS_PORT: 5432
@@ -26,7 +26,7 @@ services:
       ALLOWED_SCHEMAS: ${ALLOWED_SCHEMAS:-}
       ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-}
       STABLE_ID_COLUMNS: ${STABLE_ID_COLUMNS:-}
-      PUBLIC_TILE_BASE_URL: ${PUBLIC_TILE_BASE_URL:-http://localhost:3000}
+      PUBLIC_TILE_BASE_URL: ${PUBLIC_TILE_BASE_URL:-http://localhost:4000}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     depends_on:
       db:
@@ -36,7 +36,7 @@ services:
     networks:
       - vtserver-network
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-3000}/ || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-4000}/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
