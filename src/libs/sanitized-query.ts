@@ -10,13 +10,11 @@ export interface IQueryOptions {
 }
 
 export default function sanitizeWhereParam(raw: string, options?: IQueryOptions): string | null {
-    if (!raw) return null;
+    if (!raw || !raw.trim()) return null;
 
-    // Quick reject of obviously dangerous tokens
     const forbidden = /(;|--|\/\*|\*\/|\$\$|::|\b(SELECT|UPDATE|DELETE|INSERT|MERGE|ALTER|DROP|CREATE|GRANT|REVOKE|CALL|EXECUTE|WITH)\b)/i;
     if (forbidden.test(raw)) return null;
 
-    // Tokenize
     const tokens: string[] = [];
     const src = raw.trim();
     let i = 0;
@@ -43,7 +41,7 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
                 const cj = src[j];
                 val += cj;
                 if (cj === "'") {
-                    if (j + 1 < src.length && src[j + 1] === "'") { // escaped quote
+                    if (j + 1 < src.length && src[j + 1] === "'") {
                         val += "'";
                         j += 2;
                         continue;
@@ -61,7 +59,6 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
             continue;
         }
 
-        // Numbers (simple integer/float)
         if (isDigit(c)) {
             let j = i + 1;
             let seenDot = false;
@@ -80,7 +77,6 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
             continue;
         }
 
-        // Identifiers / keywords
         if (isIdentStart(c)) {
             let j = i + 1;
             while (j < src.length && isIdentCont(src[j])) j++;
@@ -89,25 +85,22 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
             continue;
         }
 
-        // Two-char operators
         const two = src.slice(i, i + 2);
         if ([">=", "<=", "!="].includes(two)) {
             push(two);
             i += 2;
             continue;
         }
-        // Single-char operators & punctuation
         if (["=", "<", ">", "(", ")", ","].includes(c)) {
             push(c);
             i++;
             continue;
         }
 
-        // Anything else rejected
         return null;
     }
 
-    // Canonicalize case for logical and operator keywords
+    // Canonicalize case for logical/keyword tokens so the grammar below can compare against uppercase constants
     const upper = new Set(["AND", "OR", "NOT", "IN", "LIKE", "ILIKE", "BETWEEN", "IS", "NULL", "ESCAPE"]);
     for (let t = 0; t < tokens.length; t++) {
         const u = tokens[t].toUpperCase();
@@ -115,12 +108,13 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
     }
 
     const normalizeAllowedFields = (af?: AllowedFields): ReadonlySet<string> | null => {
-        if (!af) return null; // allow all
+        if (!af) return null; // allow all (no whitelist configured)
         if (Array.isArray(af)) return new Set(af);
         return af as ReadonlySet<string>;
     };
 
     const allowed = normalizeAllowedFields(options?.allowedFields);
+    const NUM_LITERAL = /^\d+(?:\.\d+)?$/;
 
     const getRawFieldType = (fieldName: string): string | undefined => {
         if (!options?.fieldTypes) return undefined;
@@ -135,24 +129,10 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
     const getFieldCategory = (rawType?: string): 'string' | 'numeric' | 'boolean' | 'datetime' | 'unknown' => {
         if (!rawType) return 'unknown';
         const t = rawType.toLowerCase();
-        if (
-            t.includes('char') ||
-            t.includes('text') ||
-            t.includes('varchar') ||
-            t.includes('string') ||
-            t.includes('uuid')
-        ) {
+        if (['char', 'text', 'varchar', 'string', 'uuid'].some((sub) => t.includes(sub))) {
             return 'string';
         }
-        if (
-            t.includes('int') ||
-            t.includes('double') ||
-            t.includes('numeric') ||
-            t.includes('real') ||
-            t.includes('float') ||
-            t.includes('decimal') ||
-            t.includes('serial')
-        ) {
+        if (['int', 'double', 'numeric', 'real', 'float', 'decimal', 'serial'].some((sub) => t.includes(sub))) {
             return 'numeric';
         }
         if (t.includes('bool')) {
@@ -175,7 +155,7 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
 
     const isLiteral = (t: string | undefined | null): t is string => !!t && (
         t.startsWith("'") ||
-        /^\d+(?:\.\d+)?$/.test(t) ||
+        NUM_LITERAL.test(t) ||
         t === 'TRUE' ||
         t === 'FALSE'
     );
@@ -195,17 +175,17 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
             if (lit.startsWith("'")) {
                 return lit;
             }
-            if (/^\d+(?:\.\d+)?$/.test(lit)) {
+            if (NUM_LITERAL.test(lit)) {
                 return `'${lit}'`;
             }
             if (lit === 'TRUE' || lit === 'FALSE') {
                 return `'${lit.toLowerCase()}'`;
             }
-            return `'${lit}'`;
+            return `'${lit}'`; // numbers and bare boolean words become quoted strings
         }
 
         if (category === 'numeric') {
-            if (/^\d+(?:\.\d+)?$/.test(lit)) {
+            if (NUM_LITERAL.test(lit)) {
                 return lit;
             }
             if (lit.startsWith("'") && lit.endsWith("'")) {
@@ -227,10 +207,6 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
 
         return lit;
     };
-
-    function parseExpression(): string | null {
-        return parseOr();
-    }
 
     function parseOr(): string | null {
         let left = parseAnd();
@@ -270,7 +246,7 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
         const t = peek();
         if (t === '(') {
             eat('(');
-            const expr = parseExpression();
+            const expr = parseOr();
             if (expr == null) return null;
             if (eat(')') == null) return null;
             return `(${expr})`;
@@ -291,12 +267,8 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
         const t = peek();
 
         if (t === 'IS') {
-            eat('IS');
-            let not = '';
-            if (peek() === 'NOT') {
-                eat('NOT');
-                not = ' NOT';
-            }
+            if (eat('IS') == null) return null;
+            const not = peek() === 'NOT' && eat('NOT') ? ' NOT' : '';
             if (eat('NULL') == null) return null;
             return `${field} IS${not} NULL`;
         }
@@ -357,8 +329,8 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
         }
 
         let op: string | undefined;
-        const next: string | undefined = peek();
-        if (["=", "!=", "<", "<=", ">", ">="].includes(next || '')) {
+        const next = peek();
+        if (next && ["=", "!=", "<", "<=", ">", ">="].includes(next)) {
             op = eat() as string;
         }
         if (!op) return null;
@@ -374,7 +346,7 @@ export default function sanitizeWhereParam(raw: string, options?: IQueryOptions)
         return t && t.startsWith("'") ? t : undefined;
     }
 
-    const expr = parseExpression();
+    const expr = parseOr();
     if (expr == null) return null;
     if (pos !== tokens.length) return null;
 
