@@ -12,7 +12,7 @@ export class L2TileCache {
 
     constructor(options: L2TileCacheOptions = {}) {
         this.enabled = options.enabled ?? true;
-        this.defaultTtlMs = options.defaultTtlMs ?? 60 * 1000; // default 60s
+        this.defaultTtlMs = options.defaultTtlMs ?? 60 * 1000;
         this.valkey = new ValkeyClient(options);
     }
 

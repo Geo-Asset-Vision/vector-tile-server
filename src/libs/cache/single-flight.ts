@@ -40,9 +40,6 @@ export class SingleFlight<T = unknown> {
         return { value, shared: false };
     }
 
-    /**
-     * Number of currently in-flight operations.
-     */
     get inFlightCount(): number {
         return this.inFlight.size;
     }

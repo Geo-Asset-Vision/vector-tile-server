@@ -21,7 +21,6 @@ export class ValkeyClient {
     private isConnected = false;
     private isConnecting = false;
 
-    // Circuit Breaker State
     private circuitState: CircuitState = "HEALTHY";
     private consecutiveFailures = 0;
     private nextProbeTime = 0;
@@ -57,7 +56,7 @@ export class ValkeyClient {
                 this.client = new Redis({
                     host: options.host || "localhost",
                     port: options.port || 6379,
-                    password: options.password || undefined,
+                    password: options.password,
                     ...redisOpts,
                 });
             }
@@ -85,7 +84,6 @@ export class ValkeyClient {
             });
         }
 
-        // Register circuit state supplier
         cacheMetrics.registerCircuitStateSupplier(() => this.getCircuitState());
     }
 
@@ -164,9 +162,6 @@ export class ValkeyClient {
         }
     }
 
-    /**
-     * Execute a Valkey operation with command timeout and circuit breaker protection.
-     */
     private async executeWithTimeout<T>(operation: (client: Redis) => Promise<T>): Promise<T | null> {
         if (!this.isConfiguredAndEnabled || !this.client) {
             return null;
@@ -189,7 +184,6 @@ export class ValkeyClient {
 
             const result = await Promise.race([operation(this.client), timeoutPromise]);
 
-            if (timeoutHandle) clearTimeout(timeoutHandle);
             this.onSuccess();
 
             const latency = Date.now() - startTime;
@@ -197,15 +191,13 @@ export class ValkeyClient {
 
             return result;
         } catch {
-            if (timeoutHandle) clearTimeout(timeoutHandle);
             this.onFailure();
             return null;
+        } finally {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
         }
     }
 
-    /**
-     * Binary-safe GET returning Buffer.
-     */
     async getBuffer(key: string): Promise<Buffer | null> {
         return this.executeWithTimeout<Buffer | null>(async (client) => {
             // ioredis getBuffer returns Buffer | null
@@ -214,9 +206,6 @@ export class ValkeyClient {
         });
     }
 
-    /**
-     * Binary-safe SET storing raw Buffer with millisecond TTL.
-     */
     async setBuffer(key: string, value: Buffer, ttlMs: number): Promise<boolean> {
         const res = await this.executeWithTimeout<string | null>(async (client) => {
             return client.set(key, value, "PX", ttlMs);
@@ -224,9 +213,6 @@ export class ValkeyClient {
         return res === "OK";
     }
 
-    /**
-     * Delete key from Valkey.
-     */
     async del(key: string): Promise<boolean> {
         const res = await this.executeWithTimeout<number>(async (client) => {
             return client.del(key);

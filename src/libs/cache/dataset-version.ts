@@ -1,23 +1,11 @@
 export interface DatasetVersionProvider {
-    /**
-     * Get current version for a dataset layer.
-     */
     getVersion(layer: string, context?: Record<string, unknown>): Promise<string | number>;
-
-    /**
-     * Set explicit version for a dataset layer.
-     */
     setVersion?(layer: string, version: string | number): Promise<void>;
-
-    /**
-     * Atomically increment or update version for a dataset layer.
-     */
     bumpVersion?(layer: string): Promise<string | number>;
 }
 
 /**
- * In-memory dataset version provider.
- * Allows logical invalidation of cached tiles per-layer by bumping layer version.
+ * Bumping a layer's version invalidates its cached tiles (keyed on version).
  */
 export class InMemoryDatasetVersionProvider implements DatasetVersionProvider {
     private versions = new Map<string, string | number>();
@@ -51,7 +39,5 @@ export class InMemoryDatasetVersionProvider implements DatasetVersionProvider {
     }
 }
 
-/**
- * Default global dataset version provider instance.
- */
+/** Default global provider. */
 export const defaultDatasetVersionProvider = new InMemoryDatasetVersionProvider(1);
