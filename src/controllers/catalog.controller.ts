@@ -13,7 +13,7 @@ export async function catalogDiscovery(c: Context) {
 }
 
 export async function getTileJSON(c: Context) {
-    const catalogId = c.req.param("catalog_id") || c.req.param("id");
+    const catalogId = c.req.param("catalog_id");
 
     if (!catalogId) {
         return c.json({ error: "Catalog ID is required" }, 400);
