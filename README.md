@@ -41,6 +41,11 @@ pnpm build
 
 # Generate random API key
 pnpm generate:api-key
+
+# Seed sample PostGIS data
+pnpm seed
+# or
+pnpm seed:sample-data
 ```
 
 ## Docker Deployment
