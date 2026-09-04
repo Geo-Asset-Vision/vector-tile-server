@@ -1,7 +1,6 @@
 import { query } from "@/libs/db";
 import type { TCatalogItemSchema, TVectorLayer } from "@/schema";
 
-
 interface IFindAllGeomObject {
     schemaName?: string
 }
@@ -16,7 +15,6 @@ export async function findAllGeomObject(params: IFindAllGeomObject) {
     SELECT
         n.nspname AS schema_name,
         c.relname AS name,
-
         CASE c.relkind
             WHEN 'r' THEN 'table'
             WHEN 'v' THEN 'view'
@@ -83,8 +81,8 @@ export async function findAllGeomObject(params: IFindAllGeomObject) {
         const result = await query<TQueryResult>(sql, [params.schemaName ?? null]);
         return result.rows;
     } catch (e) {
-        console.error(e)
-        throw new Error('DB_ERROR')
+        console.error(e);
+        throw new Error('DB_ERROR');
     }
 }
 

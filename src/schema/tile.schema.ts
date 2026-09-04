@@ -16,6 +16,3 @@ export const GetTileQuerySchema = z.object({
     clip: z.string().optional().describe("Clip geometries to tile bounds (true/false, default: true)"),
     layer: z.string().optional().describe("Custom layer name in vector tile"),
 });
-
-export type TGetTileParams = z.infer<typeof GetTileParamsSchema>;
-export type TGetTileQuery = z.infer<typeof GetTileQuerySchema>;

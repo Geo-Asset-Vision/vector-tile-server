@@ -55,9 +55,6 @@ export const TileJSONSchema = z.object({
 });
 
 export type TListCatalogItemSchema = z.infer<typeof ListCatalogItemSchema>;
-export type TListCatalogQuery = z.infer<typeof ListCatalogQuerySchema>;
-export type TGetCatalogDetailParams = z.infer<typeof GetCatalogDetailParamsSchema>;
-export type TGetCatalogDetailQuery = z.infer<typeof GetCatalogDetailQuerySchema>;
 export type TCatalogItemSchema = z.infer<typeof CatalogItemSchema>;
 export type TTileJSONSchema = z.infer<typeof TileJSONSchema>;
 export type TVectorLayer = z.infer<typeof VectorLayerSchema>;

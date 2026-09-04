@@ -54,7 +54,7 @@ export class ValkeyRateLimitStore implements RateLimitStore {
             this.client = new Redis({
                 host: env.VALKEY_HOST || 'localhost',
                 port: env.VALKEY_PORT || 6379,
-                password: env.VALKEY_PASSWORD || undefined,
+                password: env.VALKEY_PASSWORD,
                 lazyConnect: true,
                 maxRetriesPerRequest: 1,
                 enableOfflineQueue: false,

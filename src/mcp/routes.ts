@@ -30,18 +30,11 @@ function patchNodeResponse(res: ServerResponse): void {
 export function createMcpRoutes(): Hono {
     const app = new Hono();
 
-    // Protect all MCP routes with API Key authentication middleware
     app.use("*", withAPIKey);
 
-    // Map to store active SSE transports and corresponding McpServer instances by sessionId
     const transports = new Map<string, SSEServerTransport>();
     const sessionServers = new Map<string, McpServer>();
 
-    /**
-     * SSE Stream Endpoint for Model Context Protocol
-     * Connects AI clients (e.g. Mastra MCPClient, Claude, remote agents)
-     * Creates an isolated McpServer instance per connection for multi-client concurrency.
-     */
     app.get("/sse", async (c) => {
         const req = (c.env as { incoming?: IncomingMessage })?.incoming;
         const res = (c.env as { outgoing?: ServerResponse })?.outgoing;
@@ -82,10 +75,6 @@ export function createMcpRoutes(): Hono {
         });
     });
 
-    /**
-     * Message Endpoint for Model Context Protocol
-     * Receives JSON-RPC messages and routes to the appropriate SSE session
-     */
     app.post("/messages", async (c) => {
         const req = (c.env as { incoming?: IncomingMessage })?.incoming;
         const res = (c.env as { outgoing?: ServerResponse })?.outgoing;

@@ -16,7 +16,7 @@ pool.on('error', (err) => {
     console.error('Unexpected error on idle PostgreSQL client', err);
 });
 
-export const query = <T extends QueryResultRow = any>(text: string, params?: any[]) => pool.query<T>(text, params);
+export const query = <T extends QueryResultRow>(text: string, params?: unknown[]) => pool.query<T>(text, params);
 export const getClient = () => pool.connect();
 export const checkConnection = async () => {
     console.log('[DATABASE] => Checking Database Connection...')

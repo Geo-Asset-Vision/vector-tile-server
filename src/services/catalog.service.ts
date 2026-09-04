@@ -37,7 +37,7 @@ export async function getTileJSONDetail(
         assertWhereLength(options?.where);
 
         const geomLayers = await findTableGeomLayers({ schemaName, tableName });
-        if (!geomLayers || geomLayers.length === 0) {
+        if (geomLayers.length === 0) {
             throw new Error("CATALOG_NOT_FOUND");
         }
 
@@ -61,8 +61,9 @@ export async function getTileJSONDetail(
         let sanitizedWhere: string | undefined = undefined;
         let rawWhereParam: string | undefined = undefined;
 
-        if (options?.where && options.where.trim().length > 0) {
-            rawWhereParam = options.where.trim();
+        const trimmedWhere = options?.where?.trim();
+        if (trimmedWhere) {
+            rawWhereParam = trimmedWhere;
             const sanitized = sanitizeWhereParam(rawWhereParam, {
                 allowedFields,
                 fieldTypes: combinedFieldTypes,
@@ -110,7 +111,6 @@ export async function getTileJSONDetail(
             };
         });
 
-        // Compute combined bounds across all geometry layers of this catalog item
         let minLon = Infinity;
         let minLat = Infinity;
         let maxLon = -Infinity;
@@ -138,11 +138,9 @@ export async function getTileJSONDetail(
             bounds = [minLon, minLat, maxLon, maxLat];
         }
 
-        const centerLon = (bounds[0] + bounds[2]) / 2;
-        const centerLat = (bounds[1] + bounds[3]) / 2;
         const center: [number, number, number] = [
-            Number.isFinite(centerLon) ? centerLon : 0,
-            Number.isFinite(centerLat) ? centerLat : 0,
+            (bounds[0] + bounds[2]) / 2,
+            (bounds[1] + bounds[3]) / 2,
             6,
         ];
 
