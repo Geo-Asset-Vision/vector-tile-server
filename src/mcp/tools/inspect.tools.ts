@@ -24,7 +24,7 @@ export function registerInspectTools(server: McpServer) {
                 max_sample_features: z.number().int().min(0).max(20).default(5).describe("Max sample features per layer to inspect (0-20, default 5)"),
             },
         },
-        async ({ catalog_id, z: zoom, x, y, where, max_sample_features = 5 }) => {
+        async ({ catalog_id, z: zoom, x, y, where, max_sample_features }) => {
             try {
                 const response = await getTile({
                     catalogId: catalog_id,
