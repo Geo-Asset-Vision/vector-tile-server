@@ -264,6 +264,7 @@ Vector Tile Server includes a built-in **MCP (Model Context Protocol) Server** s
 | `export_geolibre_config` | Generates ready-to-import configuration for GeoLibre workspace. |
 | `get_cache_and_server_metrics` | Returns L1/L2 cache hit ratios, memory, Valkey status, and Prometheus metrics. |
 | `purge_layer_cache` | Invalidates cached vector tiles by bumping dataset version and clearing L1 LRU. |
+| `search_spatial_catalogs` | Semantically searches the spatial catalog index and returns layers ranked by relevance (see [Semantic Spatial Catalog Search](#semantic-spatial-catalog-search)). |
 
 ### Authentication & Security (API Key)
 
@@ -402,3 +403,218 @@ server {
 | **PM2 Clustered Mode** | ⚠️ **Requires Gateway** | Run individual PM2 fork instances across ports with Nginx `ip_hash`. |
 | **Stdio Subprocess** | ✅ **100% Compatible** | Direct OS stdio pipe, completely isolated from network load balancers. |
 
+
+---
+
+## Semantic Spatial Catalog Search
+
+The server can embed **spatial catalog layers** (PostGIS tables/views and their geometry columns) with a local multilingual ONNX model and answer natural-language queries like `cari lahan kosong` or `jalan banjir` with **ranked layer metadata** — never spatial features, never raw vectors. Search is served to MCP clients through the `search_spatial_catalogs` tool. The index, refresh, and model provisioning run as explicit CLI operations — there is **no automatic reindexing** and the model is **never downloaded at runtime**.
+
+```mermaid
+flowchart LR
+    MCP["MCP client / LLM agent"] -->|search_spatial_catalogs| S[RetrievalService]
+    S --> V[(Valkey: sem:manifest + sem:index:vN)]
+    V --> E[embedding runtime<br/>Xenova/multilingual-e5-small, local ONNX]
+    Ops["operator (host or dev)"] -->|pnpm semantic:refresh| R[refresh: PostGIS → canonical docs → embed diffs → publish vN+1]
+    R --> V
+    Ops2["operator (once per checkout)"] -->|pnpm semantic:prefetch| M[(models/ on disk)]
+```
+
+> [!NOTE]
+> Ranking is an **exact cosine over unit-normalized 384-dim vectors** — a linear scan over the indexed layers. It is deliberately *not* an approximate (ANN/HNSW) index, so quality is exact but latency is linear in the number of layers.
+
+### What gets indexed
+
+Refresh (`pnpm semantic:refresh`) traverses every geometry object the tile server serves (`POSTGIS_SCHEMA` scope), builds one canonical document per geometry **layer** (`schema.table.geometry` + geometry type + SRID + descriptions + fields, truncated deterministically at 1500 chars), and stores one 384-dim float32 vector per layer. The published index is **versioned and immutable**:
+
+- `sem:manifest` — one key holding `{ version, layers[], documentCount, publishedAt, embeddingContract, sourceFingerprint, layerDetails }`.
+- `sem:index:<version>:<schema>.<table>.<geometry>` — one key per layer holding the raw float32 vector.
+- Readers resolve `version` from the manifest and `MGET` exactly its layer keys — no `SCAN`/`KEYS` on the search path. A version bump invalidates every version-scoped LRU cache entry naturally.
+
+### Environment variables
+
+All values are parsed by `src/libs/semantic/config.ts` (separate from the MVT cache env) and apply to the CLI scripts and the MCP tool. Defaults shown; setting a value outside its valid range fails startup with a descriptive error.
+
+| Variable | Default | Valid range | Purpose |
+| :--- | :--- | :--- | :--- |
+| `SEMANTIC_MODEL_DIR` | `models/Xenova/multilingual-e5-small` | any readable path | Directory containing the packaged ONNX artifacts (`config.json`, `tokenizer.json`, `tokenizer_config.json`, `onnx/model.onnx`). Host + container. |
+| `SEMANTIC_MODEL_ID` | `Xenova/multilingual-e5-small` | this exact value only | Embedding model id. The runtime **refuses** any other model. |
+| `SEMANTIC_DIM` | `384` | this exact value only | Embedding dimension; anything else means a corrupted artifact. |
+| `SEMANTIC_MAX_CONCURRENT_EMBEDDINGS` | `1` | integer `1..16` | Bounded concurrency for embedding inference (a FIFO queue bounds the rest). |
+| `SEMANTIC_TOP_K_DEFAULT` | `10` | integer `1..100` | Default result count when a search omits `top_k`. |
+| `SEMANTIC_TOP_K_MAX` | `100` | integer `1..100`, `>= SEMANTIC_TOP_K_DEFAULT` | Hard cap on `top_k` per request. |
+| `SEMANTIC_DOCUMENT_CACHE_SIZE` | `4096` | integer `1..1_000_000` | LRU cap for cached per-layer document vectors. |
+| `SEMANTIC_QUERY_CACHE_SIZE` | `1024` | integer `1..1_000_000` | LRU cap for cached query embeddings. |
+| `SEMANTIC_RESULT_CACHE_SIZE` | `1024` | integer `1..1_000_000` | LRU cap for cached ranked results. |
+
+The semantic stack needs the same PostGIS + Valkey connection env as the rest of the server (`POSTGIS_HOST`, `POSTGIS_PORT`, `POSTGIS_DB`, `POSTGIS_USER`, `POSTGIS_PASSWORD`, `POSTGIS_SCHEMA`, `VALKEY_HOST`, `VALKEY_PORT`, `VALKEY_PASSWORD`). If Valkey is unconfigured/disconnected the CLI fails fast and the MCP tool returns a typed `INDEX_UNAVAILABLE` error.
+
+### Provisioning the model (once per checkout)
+
+The ONNX artifacts are **not** in git and are **never downloaded at runtime**. Provision them once per checkout on the host:
+
+```bash
+pnpm semantic:prefetch
+```
+
+This writes `models/Xenova/multilingual-e5-small/` (model id + artifacts; ~466 MB) and a `.prefetch-verified.json` marker. Remote loading is hard-disabled in code (`env.allowRemoteModels = false`), so a missing artifact fails with a typed `MODEL_UNAVAILABLE` error naming the missing file — never a network attempt.
+
+### Building the search index
+
+```bash
+pnpm semantic:refresh
+```
+
+Behavior (exit code non-zero on any typed failure — never a silent success):
+
+- Traverses the PostGIS catalog, builds canonical documents, and diffs them **by fingerprint** (SHA-256 over the canonical passage + embedding contract) against the currently published version.
+- **Changed/new layers** are re-embedded in one batched pipeline call; **unchanged layers** reuse the stored vector; **removed layers** disappear when the superseded namespace is purged.
+- **No-op rerun** (byte-identical catalog **and** unchanged embedding contract): prints `catalog unchanged — version N still current (M layers, all reused)` and publishes nothing.
+- First refresh publishes `v1`; a real change publishes `vN+1` (old namespace purged after the manifest overwrite — readers observe exactly one version).
+- **Model contract change / artifact drift** (a re-provisioned or altered model under `SEMANTIC_MODEL_DIR` makes `modelContractFingerprint()` differ from the manifest's `embeddingContract`, even when the catalog is byte-identical): the next `pnpm semantic:refresh` detects the drift and triggers a **full reindex automatically** — every layer is re-embedded (0 reused — old vectors were produced by a different model), a new version is published, and the new `embeddingContract` is recorded in the manifest. This is the recovery path for the read-side `VERSION_MISMATCH`: no manual steps beyond running the refresh.
+- **Read-side safety is unchanged**: until that refresh runs, searches compare the local fingerprint against the manifest and fail with `VERSION_MISMATCH` rather than ever ranking with mismatched model vectors.
+
+**Reindex triggers** — a refresh re-embeds a layer when its fingerprint changes. The fingerprint covers the canonical passage + embedding contract, so it changes when any of the following changes:
+
+| Trigger | Example |
+| :--- | :--- |
+| Table/geometry **description** (PostGIS `COMMENT`) | `COMMENT ON TABLE site_plan IS '...'` |
+| **Fields** included in the document | adding/renaming a column |
+| **Geometry type or geometry column** name | `geom` → `geom_4326` |
+| **Schema/table** rename | `public.site_plan` → `gis.site_plan` |
+| **Model contract** change | new model id, dimension, pooling, or normalize flag in `EMBEDDING_CONTRACT`, **or** re-provisioned/altered on-disk artifacts → `pnpm semantic:refresh` fully re-embeds under the new `embeddingContract` and republishes. |
+
+Until that refresh runs, searches fail with `VERSION_MISMATCH`; running `pnpm semantic:refresh` records the new contract in the manifest and restores search (no other manual step).
+
+### Benchmark
+
+```bash
+pnpm semantic:benchmark
+```
+
+Deterministic, exact-cosine benchmark against the **live** published index (start PostGIS + Valkey with `docker compose up db valkey -d` and refresh first). Fixed bilingual query set and iteration counts, concurrency 1. Measures index size (manifest + vector bytes, layer count), no-op refresh duration, query-embedding p50/p95, warm search p50/p95, and peak process RSS after warmup.
+
+- Writes a machine-readable result to **`benchmark-results-semantic.json`** at the repo root (JSON: `index.*`, `refresh.*`, `embedding.p50Ms/p95Ms`, `search.p50Ms/p95Ms`, `rss.peakMbAfterWarmup`).
+- Prints a human summary to stdout.
+- States plainly in the output that the method is `exact-cosine-linear-scan` and is **not comparable to ANN/HNSW benchmarks**.
+- Is a standalone ops script — **not** wired into the server or MCP request path.
+
+### MCP tool contract
+
+Tool name: `search_spatial_catalogs`. Description and input schema are served through the MCP `tools/list` endpoint (the semantic stack loads lazily on the first call — registering tools never loads the model).
+
+**Input** (JSON object):
+
+| Field | Type | Required | Constraints |
+| :--- | :--- | :--- | :--- |
+| `query` | string | yes | non-blank (trimmed); natural-language description of the layers to find |
+| `top_k` | int | no | `1..100` (capped by `SEMANTIC_TOP_K_MAX`); defaults to `SEMANTIC_TOP_K_DEFAULT` |
+| `schema` | string | no | only layers in this PostgreSQL schema (exact) |
+| `geometry_type` | string | no | only layers whose PostGIS geometry type matches (trimmed, lowercased) |
+
+**Request example**
+
+```json
+{
+  "name": "tools/call",
+  "arguments": {
+    "name": "search_spatial_catalogs",
+    "arguments": {
+      "query": "jalan banjir",
+      "top_k": 5,
+      "schema": "public",
+      "geometry_type": "MultiLineStringZ"
+    }
+  }
+}
+```
+
+**Response** (`isError` absent) — a text content block with pretty-printed JSON:
+
+```json
+{
+  "query": "jalan banjir",
+  "total_results": 1,
+  "results": [
+    {
+      "layer": { "schema": "public", "table": "site_plan", "geometry": "geom" },
+      "catalogId": "public.site_plan",
+      "geometryType": "MultiLineStringZ",
+      "score": 0.8021173643355335,
+      "tableDescription": "Rencana tapak pembangunan perumahan dan jalan lingkungan"
+    }
+  ]
+}
+```
+
+Each `result` carries only `layer {schema, table, geometry}`, `catalogId` (`schema.table`), `geometryType`, `score` (cosine similarity, `0..1`), and optional `tableDescription` / `geometryDescription`. Results are sorted by score descending with a deterministic alphabetical tie-break on `layerId`; **raw vectors are never returned**.
+
+**Error** (`isError: true`) — a text content block with JSON `{ code, message }`. A failure is never an empty `results` list:
+
+| Code | Meaning / recovery |
+| :--- | :--- |
+| `INDEX_NOT_FOUND` | No manifest published yet — run `pnpm semantic:refresh`. |
+| `INDEX_UNAVAILABLE` | Store unconfigured/disconnected, circuit `DEGRADED`, or a missing/corrupt vector — check Valkey, then `pnpm semantic:refresh`. |
+| `MODEL_UNAVAILABLE` | Local model artifacts missing — run `pnpm semantic:prefetch` on the host (or bake the model into the image); the runtime never downloads. |
+| `VERSION_MISMATCH` | Stored index was embedded under a model contract different from the local artifacts — if the current model is intended, run `pnpm semantic:refresh` (detects the drift and full-reindexes, publishing a new version under the new contract); if not, restore/provision the matching model and refresh. |
+| `INVALID_ARGS` | Blank query / out-of-range `top_k` (invalid requests are also rejected by the Zod schema before the handler). |
+| `EMBEDDING_FAILED` | Model output violates the contract — artifact may be corrupted; re-run `pnpm semantic:prefetch`. |
+| `INTERNAL` | Unexpected failure. |
+
+**Example error response**
+
+```json
+{
+  "isError": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "{ \"code\": \"INDEX_NOT_FOUND\", \"message\": \"no index manifest has been published yet\" }"
+    }
+  ]
+}
+```
+
+### Metrics
+
+The semantic stack keeps its own in-process Prometheus registry, separate from the MVT cache registry — every line is prefixed `semantic_search_*`. Counters/gauges (from `src/libs/semantic/metrics.ts`):
+
+| Metric | Type | Meaning |
+| :--- | :--- | :--- |
+| `semantic_search_requests_total` | counter | Total search requests |
+| `semantic_search_latency_milliseconds` | counter | Total search latency (ms) |
+| `semantic_search_latency_average_milliseconds` | gauge | Average search latency (ms) |
+| `semantic_search_embeddings_total` | counter | Embeddings computed (one per output vector) |
+| `semantic_search_document_cache_hits_total` / `..._misses_total` | counter | Per-layer document LRU hits/misses |
+| `semantic_search_query_cache_hits_total` / `..._misses_total` | counter | Query-embedding LRU hits/misses |
+| `semantic_search_result_cache_hits_total` / `..._misses_total` | counter | Ranked-result LRU hits/misses |
+| `semantic_search_errors_total{code="..."}` | counter | Errors labeled by code (`INDEX_UNAVAILABLE`, `MODEL_UNAVAILABLE`, `INVALID_ARGS`, `INDEX_NOT_FOUND`, `EMBEDDING_FAILED`, `VERSION_MISMATCH`, `INTERNAL`) |
+
+> [!NOTE]
+> The HTTP `GET /metrics` endpoint currently exposes the **MVT cache** registry (`mvt_cache_*`). `semantic_search_*` lines live in the separate `SemanticSearchMetrics` registry (`getSnapshot()` / `toPrometheus()` in `src/libs/semantic/metrics.ts`) which the refresh/benchmark CLIs read in-process; the semantic registry is not yet mounted on `GET /metrics`.
+
+### Docker behavior
+
+- **Base image**: both build stages run on `node:22-slim` (Debian glibc) because the ONNX runtime's native binding does not run on musl/Alpine.
+- **Model is baked, not fetched**: the Dockerfile `COPY`s the host-provisioned `models/` tree into the image (`COPY models ./models`). There is no model-fetch path in the image and remote loading is hard-disabled, so a production container with the model present runs fully offline.
+- **Non-root**: the runner drops to the stock `node` user (uid 1000); `/app` is chowned to it and model artifacts stay `644` (read-only — the runtime contract is read-only).
+- **Semantic feature is not enabled by default in the image**: the image ships the code + model, but no semantic index is published until an operator runs a refresh **against the container's Valkey**. Run the refresh from the host (dev) or an operator container:
+  ```bash
+  # host/dev: point the refresh at the compose services, then it targets the
+  # same Valkey the app container uses
+  pnpm semantic:refresh
+  ```
+- `pnpm semantic:prefetch` is a **host/dev-only** command (it provisions `models/` on disk before a Docker build). It is deliberately not runnable inside the production image, which relies on the bake.
+- The MCP stdio entrypoint `node dist/mcp/stdio.js` boots without loading the model; the model loads lazily on the first `search_spatial_catalogs` call.
+
+### Rollback / disabling the semantic feature
+
+Disabling the feature requires **no code change** — it is a configuration/deployment toggle:
+
+1. **Simplest** — don't register the tool: the semantic tool is registered by the MCP server bootstrap. Remove the registration (or ship a build without `src/mcp/tools/semantic-search.tools.ts` wired in `src/mcp/index.ts`) and no client ever sees `search_spatial_catalogs`. The MVT tools are unaffected.
+2. **Remove the index** — point the app at a Valkey with no `sem:manifest` (or delete it: `docker exec vector-tile-valkey valkey-cli -a <password> DEL sem:manifest`). Calls then fail with the typed `INDEX_NOT_FOUND` error instead of returning results.
+3. **Remove the model** — delete/unset `SEMANTIC_MODEL_DIR` (or remove the `models/` tree). Calls fail fast with `MODEL_UNAVAILABLE`; nothing is downloaded to compensate.
+4. **Stop refreshing** — since reindexing is purely operator-driven (`pnpm semantic:refresh`), simply not running it freezes the index at its current version forever. The MVT tile cache and all non-semantic MCP tools are completely independent of the semantic stack (lazy-imported only on first semantic call) and keep working while the feature is disabled.
+
+> [!NOTE]
+> Documented contract, defaults, and behavior reflect the shipped code. The disable paths above are operational toggles — no code change and no env-var rename is required to turn the feature off.

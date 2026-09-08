@@ -4,6 +4,7 @@ import { registerSpatialTools } from "./tools/spatial.tools";
 import { registerInspectTools } from "./tools/inspect.tools";
 import { registerStylingTools } from "./tools/styling.tools";
 import { registerCacheTools } from "./tools/cache.tools";
+import { registerSemanticSearchTools } from "./tools/semantic-search.tools";
 import { registerResources } from "./resources/catalog.resources";
 import { registerPrompts } from "./prompts/spatial.prompts";
 
@@ -18,6 +19,9 @@ export function createVectorTileMcpServer(): McpServer {
     registerInspectTools(server);
     registerStylingTools(server);
     registerCacheTools(server);
+    registerSemanticSearchTools(server);
+
+    // Register resources & prompts
     registerResources(server);
     registerPrompts(server);
 

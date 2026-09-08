@@ -206,17 +206,57 @@ export class ValkeyClient {
         });
     }
 
-    async setBuffer(key: string, value: Buffer, ttlMs: number): Promise<boolean> {
+    /**
+     * Binary-safe SET storing raw Buffer with optional millisecond TTL.
+     *
+     * `ttlMs` omitted/0/undefined = no expiry (persistent). Callers that always
+     * passed a TTL are unchanged; the index namespace relies on no-expiry keys
+     * that live until explicitly purged.
+     */
+    async setBuffer(key: string, value: Buffer, ttlMs?: number): Promise<boolean> {
         const res = await this.executeWithTimeout<string | null>(async (client) => {
-            return client.set(key, value, "PX", ttlMs);
+            if (ttlMs && ttlMs > 0) {
+                return client.set(key, value, "PX", ttlMs);
+            }
+            return client.set(key, value);
         });
         return res === "OK";
     }
 
+    /**
+     * Binary-safe batch GET. Returns `null` when the operation cannot run
+     * (unconfigured/disconnected/DEGRADED) so callers can tell an unavailable
+     * store apart from a plain miss (`(Buffer | null)[]` with null elements).
+     * Result is positional over `keys`; null element = key absent.
+     */
+    async mgetBuffer(keys: string[]): Promise<(Buffer | null)[] | null> {
+        if (keys.length === 0) return [];
+        return this.executeWithTimeout<(Buffer | null)[]>(async (client) => {
+            const res = await client.mgetBuffer(keys);
+            return res.map((buf) => (buf && Buffer.isBuffer(buf) ? buf : null));
+        });
+    }
+
+    /**
+     * Delete a single key from Valkey.
+     */
     async del(key: string): Promise<boolean> {
         const res = await this.executeWithTimeout<number>(async (client) => {
             return client.del(key);
         });
         return Boolean(res && res > 0);
+    }
+
+    /**
+     * Delete many keys in one round trip. Returns count of removed keys, or 0
+     * when the operation cannot run. Variadic `del` lets callers with a known
+     * key list purge a superseded namespace without SCAN/KEYS.
+     */
+    async delMany(keys: string[]): Promise<number> {
+        if (keys.length === 0) return 0;
+        const res = await this.executeWithTimeout<number>(async (client) => {
+            return client.del(...keys);
+        });
+        return res ?? 0;
     }
 }

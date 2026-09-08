@@ -10,6 +10,9 @@
     "generate:api-key": "tsx scripts/generate-api-key.ts",
     "seed": "tsx scripts/seed-sample-data.ts",
     "seed:sample-data": "tsx scripts/seed-sample-data.ts",
+    "semantic:prefetch": "tsx scripts/prefetch-semantic-model.ts",
+    "semantic:refresh": "tsx scripts/refresh-semantic-index.ts",
+    "semantic:benchmark": "tsx scripts/benchmark-semantic.ts",
     "lint": "oxlint src scripts",
     "lint:fix": "oxlint --fix src scripts",
     "test": "vitest run",
@@ -20,6 +23,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.0",
     "@hono/standard-validator": "^0.4.0",
+    "@huggingface/transformers": "^4.2.0",
     "@mapbox/vector-tile": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@scalar/hono-api-reference": "^0.11.13",

@@ -62,4 +62,41 @@ Follow these steps:
             };
         }
     );
+
+    server.registerPrompt(
+        "search-spatial-semantic",
+        {
+            description: "Workflow to semantically search the spatial catalog with a natural-language query, inspect the top-ranked layer, and produce a recommended tile URL and MapLibre style",
+            argsSchema: {
+                query: z.string().describe("Natural-language query describing the spatial layer to find (e.g. 'cari lahan kosong', 'jalan banjir')"),
+                top_k: z.number().int().min(1).max(10).optional().describe("Number of top-ranked results to consider (1-10)"),
+                schema: z.string().optional().describe("Filter catalog schema (e.g. 'public')"),
+            },
+        },
+        ({ query, top_k, schema }) => {
+            const args = [
+                `query: '${query}'`,
+                ...(top_k !== undefined ? [`top_k: ${top_k}`] : []),
+                ...(schema !== undefined ? [`schema: '${schema}'`] : []),
+            ].join(", ");
+            return {
+                messages: [
+                    {
+                        role: "user",
+                        content: {
+                            type: "text",
+                            text: `Please semantically search the spatial catalog and produce a tile-ready recommendation.
+Follow these steps:
+1. Call 'search_spatial_catalogs' with ${args}. Note the top-ranked result's catalogId and score from the returned results array.
+2. Call 'get_catalog_schema' on that catalogId to inspect the geometry type, SRID, and available attribute columns.
+3. Call 'get_tilejson' for that catalogId to retrieve the spatial bounding box and available zoom levels.
+4. Call 'generate_tile_url' to produce a sample tile URL for the catalogId.
+5. Call 'generate_maplibre_style' to get a recommended MapLibre style for the layer.
+6. Report the catalogId, score, geometry type, SRID, and the generated tile URL and style recommendation.`,
+                        },
+                    },
+                ],
+            };
+        }
+    );
 }
