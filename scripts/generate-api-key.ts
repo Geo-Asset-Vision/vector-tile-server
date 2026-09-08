@@ -2,10 +2,6 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-function generateApiKey() {
-    return crypto.randomBytes(64).toString('base64url');
-}
-
 function updateEnv(apiKey: string) {
     const envPath = path.join(process.cwd(), '.env')
 
@@ -26,7 +22,7 @@ function updateEnv(apiKey: string) {
 }
 
 function main() {
-    const apiKey = generateApiKey()
+    const apiKey = crypto.randomBytes(64).toString('base64url')
     updateEnv(apiKey)
 
     console.log('Generated API Key:', apiKey)

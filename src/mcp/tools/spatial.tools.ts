@@ -4,6 +4,7 @@ import env from "@/libs/env";
 import { query } from "@/libs/db";
 import { quoteTable, qualifyColumn, quoteIdentifier } from "@/libs/tile";
 import { findTableGeomLayers } from "@/repositories/catalog.repo";
+import { parseCatalogId } from "@/libs/map-config";
 import sanitizeWhereParam from "@/libs/sanitized-query";
 
 export function latLonToTile(lat: number, lon: number, zoom: number): { z: number; x: number; y: number } {
@@ -113,16 +114,9 @@ export function registerSpatialTools(server: McpServer) {
                 limit: z.number().min(1).max(200).default(50).describe("Maximum number of features to return (1-200, default 50)"),
             },
         },
-        async ({ catalog_id, where, limit = 50 }) => {
+        async ({ catalog_id, where, limit }) => {
             try {
-                let schemaName = env.POSTGIS_SCHEMA || "public";
-                let tableName = catalog_id;
-
-                if (catalog_id.includes(".")) {
-                    const parts = catalog_id.split(".");
-                    schemaName = parts[0];
-                    tableName = parts.slice(1).join(".");
-                }
+                const { schemaName, tableName } = parseCatalogId(catalog_id, env.POSTGIS_SCHEMA || "public");
 
                 const geomLayers = await findTableGeomLayers({ schemaName, tableName });
                 if (!geomLayers || geomLayers.length === 0) {
@@ -228,14 +222,7 @@ export function registerSpatialTools(server: McpServer) {
         },
         async ({ catalog_id, column_name, sample_size = 20 }) => {
             try {
-                let schemaName = env.POSTGIS_SCHEMA || "public";
-                let tableName = catalog_id;
-
-                if (catalog_id.includes(".")) {
-                    const parts = catalog_id.split(".");
-                    schemaName = parts[0];
-                    tableName = parts.slice(1).join(".");
-                }
+                const { schemaName, tableName } = parseCatalogId(catalog_id, env.POSTGIS_SCHEMA || "public");
 
                 const geomLayers = await findTableGeomLayers({ schemaName, tableName });
                 if (!geomLayers || geomLayers.length === 0) {

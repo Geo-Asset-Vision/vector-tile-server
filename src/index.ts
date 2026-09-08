@@ -8,9 +8,11 @@ import { logger } from 'hono/logger'
 import { disconnect, checkConnection } from '@/libs/db'
 import { rateLimiter } from '@/libs/rate-limiter'
 import { tileCache } from '@/libs/cache'
-import { cors } from 'hono/cors'
+import { createCorsMiddleware } from '@/middleware'
 import appRouter from '@/routes'
 
+const corsOrigins = (env.CORS_ALLOWED_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+const allowAllOrigins = corsOrigins.includes('*');
 
 if (!await checkConnection()) {
   process.exit(1);
@@ -23,11 +25,27 @@ if (!env.API_KEY) {
   console.log('[SECURITY] => API Key Protection is Enabled')
 }
 
+if (allowAllOrigins) {
+  console.log('[SECURITY] => CORS: Wildcard (*) enabled. All cross-origin browser requests allowed.');
+} else if (corsOrigins.length > 0) {
+  console.log(`[SECURITY] => CORS: Allowed origins: ${corsOrigins.join(', ')}`);
+} else {
+  console.warn('[SECURITY] => CORS: No allowed origins configured (CORS_ALLOWED_ORIGINS is empty). Cross-origin browser requests will be rejected.');
+}
+
 const app = new Hono()
 app.use(logger())
-app.use('*', cors())
 app.get('/', (c) => {
   return c.text(`Vector Tile Server is running. Visit ${env.APP_BASE_URL}/docs for API docs or ${env.APP_BASE_URL}/llms.txt for LLMs.`)
+})
+
+app.use('*', createCorsMiddleware(env.CORS_ALLOWED_ORIGINS))
+
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'no-referrer');
 })
 
 app.route('/', appRouter)
@@ -65,11 +83,7 @@ app.get('/docs', Scalar({
 }));
 
 let cachedMarkdown: string | null = null;
-/**
- * Register route to serve API Reference Markdown for LLMs (llms.txt standard)
- * @see https://llmstxt.org/
- * @see https://scalar.com/products/api-references/integrations/hono#markdown-for-llms
- */
+
 app.get('/llms.txt', async (c) => {
   if (!cachedMarkdown) {
     const specs = await generateSpecs(app, openApiDocConfig, c);

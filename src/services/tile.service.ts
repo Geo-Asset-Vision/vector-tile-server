@@ -5,6 +5,7 @@ import {
 import { findTableGeomLayers } from "@/repositories/catalog.repo";
 import sanitizeWhereParam from "@/libs/sanitized-query";
 import env from "@/libs/env";
+import { explicitStableId, parseCatalogId } from "@/libs/map-config";
 import {
     buildTileCacheKey,
     tileCache,
@@ -87,20 +88,10 @@ export async function getTile(
 ): Promise<TileResponse> {
     const { catalogId, z, x, y } = options;
 
-    let schemaName = env.POSTGIS_SCHEMA || "public";
-    let tableName = catalogId;
-
-    if (catalogId.includes(".")) {
-        const parts = catalogId.split(".");
-        schemaName = parts[0];
-        tableName = parts.slice(1).join(".");
-    }
+    const { schemaName, tableName } = parseCatalogId(catalogId, env.POSTGIS_SCHEMA || "public");
 
     try {
-        // Retrieve dataset version for deterministic cache key
         const datasetVersion = await datasetVersionProvider.getVersion(catalogId);
-
-        // Build deterministic cache key
         const cacheKey = buildTileCacheKey({
             catalogId,
             datasetVersion,
@@ -140,10 +131,11 @@ export async function getTile(
                 const srid = geomLayer.srid || 4326;
                 const layerFields = geomLayer.fields || {};
 
+                const validFields = new Set(Object.keys(layerFields));
                 const allowedFields = new Set<string>();
-                for (const key of Object.keys(layerFields)) {
-                    allowedFields.add(key);
-                    allowedFields.add(key.toLowerCase());
+                for (const field of validFields) {
+                    allowedFields.add(field);
+                    allowedFields.add(field.toLowerCase());
                 }
                 if (geomColumn) {
                     allowedFields.add(geomColumn);
@@ -162,19 +154,17 @@ export async function getTile(
                     sanitizedWhereSql = sanitized;
                 }
 
-                const validFields = new Set(Object.keys(layerFields));
                 const properties =
                     options.properties && options.properties.length > 0
                         ? options.properties.filter((p) => validFields.has(p))
                         : Object.keys(layerFields);
 
-                const layerName = options.layerName
-                    ? targetGeomLayers.length > 1
-                        ? `${options.layerName}_${geomColumn}`
-                        : options.layerName
-                    : geomLayers.length > 1
-                        ? `${tableName}_${geomColumn}`
-                        : tableName;
+                let layerName: string;
+                if (options.layerName) {
+                    layerName = targetGeomLayers.length > 1 ? `${options.layerName}_${geomColumn}` : options.layerName;
+                } else {
+                    layerName = geomLayers.length > 1 ? `${tableName}_${geomColumn}` : tableName;
+                }
 
                 singleLayerOptionsList.push({
                     schema: schemaName,
@@ -187,6 +177,11 @@ export async function getTile(
                     properties,
                     layerName,
                     whereSql: sanitizedWhereSql,
+                    idColumn:
+                        explicitStableId(schemaName, tableName) ||
+                        (geomLayer.primary_key_columns?.length === 1
+                            ? geomLayer.primary_key_columns[0]
+                            : undefined),
                 });
             }
 

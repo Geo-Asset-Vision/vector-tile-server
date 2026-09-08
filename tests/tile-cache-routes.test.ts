@@ -12,12 +12,13 @@ describe("Tile Cache End-to-End Route Tests", () => {
 
     beforeEach(async () => {
         tileCache.l1Cache.clear();
-        await datasetVersionProvider.bumpVersion("buildings");
-        await datasetVersionProvider.bumpVersion("public.buildings");
-        await datasetVersionProvider.bumpVersion("roads");
-        await datasetVersionProvider.bumpVersion("public.roads");
-        await datasetVersionProvider.bumpVersion("parcels");
-        await datasetVersionProvider.bumpVersion("public.parcels");
+        const v = Date.now();
+        await datasetVersionProvider.setVersion?.("buildings", v);
+        await datasetVersionProvider.setVersion?.("public.buildings", v);
+        await datasetVersionProvider.setVersion?.("roads", v);
+        await datasetVersionProvider.setVersion?.("public.roads", v);
+        await datasetVersionProvider.setVersion?.("parcels", v);
+        await datasetVersionProvider.setVersion?.("public.parcels", v);
         env.API_KEY = "";
     });
 

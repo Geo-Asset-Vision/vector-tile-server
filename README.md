@@ -25,7 +25,7 @@ docker compose up db valkey -d
 pnpm dev
 ```
 
-Visit the interactive API documentation at [http://localhost:3000/docs](http://localhost:3000/docs) or LLM Markdown at [http://localhost:3000/llms.txt](http://localhost:3000/llms.txt).
+Visit the interactive API documentation at [http://localhost:4000/docs](http://localhost:4000/docs) or LLM Markdown at [http://localhost:4000/llms.txt](http://localhost:4000/llms.txt).
 
 ## Scripts
 
@@ -41,6 +41,11 @@ pnpm build
 
 # Generate random API key
 pnpm generate:api-key
+
+# Seed sample PostGIS data
+pnpm seed
+# or
+pnpm seed:sample-data
 ```
 
 ## Docker Deployment
@@ -58,6 +63,13 @@ docker compose up --build -d
 docker compose logs -f app
 ```
 
+## Map hardening (Wave 2A)
+
+- **Allowlists** (`ALLOWED_SCHEMAS`, `ALLOWED_CATALOGS`): unauthorized schema/catalog discovery, TileJSON detail, and tiles return 404 (no catalog enumeration). Empty = all allowed (baseline).
+- **Stable feature IDs** (`STABLE_ID_COLUMNS`): explicit `catalog:column` mapping first, single-column primary key fallback, never `ctid`. TileJSON carries `featureIdProperty`/`highlightSupported`; MVT sets the external feature id from that column and removes it from properties.
+- **`where`** uses the existing sanitizer; max 1000 chars.
+- **CORS** locked to `CORS_ALLOWED_ORIGINS` or rejected for cross-origin browser reads. Cache/security headers set.
+- Decoded-MVT integration test: `RUN_VT_INTEGRATION=1 pnpm test tests/mvt-feature-id.integration.test.ts` (needs live PostGIS sample DB).
 ---
 
 ## 2-Level Vector Tile Cache Architecture
@@ -177,7 +189,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/tiles.yourdomain.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:4000;
         proxy_http_version 1.1;
 
         proxy_set_header Host $host;
@@ -213,7 +225,7 @@ server {
     # Note the trailing slashes on both location and proxy_pass:
     # This strips the `/gis/` prefix when forwarding to the vector tile server.
     location /gis/ {
-        proxy_pass http://127.0.0.1:3000/;
+        proxy_pass http://127.0.0.1:4000/;
         proxy_http_version 1.1;
 
         proxy_set_header Host $host;
@@ -271,16 +283,16 @@ The official **MCP Inspector** tool provides a web UI to test and inspect all to
 
 ```bash
 # Important: Always wrap the URL in quotes in zsh/bash to prevent globbing the `?` query character
-npx @modelcontextprotocol/inspector "http://localhost:3000/mcp/sse?apiKey=YOUR_API_KEY"
+npx @modelcontextprotocol/inspector "http://localhost:4000/mcp/sse?apiKey=YOUR_API_KEY"
 ```
 
 Or test with custom headers via cURL:
 ```bash
 # Test SSE stream handshake
-curl -N -i -H "X-API-Key: YOUR_API_KEY" http://localhost:3000/mcp/sse
+curl -N -i -H "X-API-Key: YOUR_API_KEY" http://localhost:4000/mcp/sse
 
 # Or via query parameter
-curl -N -i "http://localhost:3000/mcp/sse?apiKey=YOUR_API_KEY"
+curl -N -i "http://localhost:4000/mcp/sse?apiKey=YOUR_API_KEY"
 ```
 
 ---
@@ -298,10 +310,10 @@ export const mcpClient = new MCPClient({
   servers: {
     vectorTileServer: {
       // Option A: Via URL Query Parameter (Recommended)
-      url: new URL("http://localhost:3000/mcp/sse?apiKey=" + process.env.VECTOR_TILE_API_KEY),
+      url: new URL("http://localhost:4000/mcp/sse?apiKey=" + process.env.VECTOR_TILE_API_KEY),
 
       // Option B: Via Custom Headers
-      // url: new URL("http://localhost:3000/mcp/sse"),
+      // url: new URL("http://localhost:4000/mcp/sse"),
       // headers: {
       //   "X-API-Key": process.env.VECTOR_TILE_API_KEY,
       // },
@@ -359,7 +371,7 @@ When deploying multiple instances of the server (e.g. `docker compose up --scale
 ```nginx
 upstream tile_cluster {
     ip_hash; # Routes requests from the same client IP to the same worker instance
-    server 127.0.0.1:3000;
+    server 127.0.0.1:4000;
     server 127.0.0.1:3001;
     server 127.0.0.1:3002;
 }
@@ -413,7 +425,7 @@ flowchart LR
 
 ### What gets indexed
 
-Refresh (`pnpm semantic:refresh`) traverses every geometry object the tile server serves (`POSTGIS_SCHEMA` scope), builds one canonical document per geometry **layer** (`schema.table.geometry` + geometry type + SRID + descriptions + fields, truncated deterministically at 1500 chars), and stores one 384-dim float32 vector per layer. The published index is **versioned and immutable**:
+Refresh (`pnpm semantic:refresh`) traverses every geometry object the tile server serves (`POSTGIS_SCHEMA` scope) **restricted to the allowlisted catalog surface** (`ALLOWED_SCHEMAS`/`ALLOWED_CATALOGS`; empty = all allowed), builds one canonical document per geometry **layer** (`schema.table.geometry` + geometry type + SRID + descriptions + fields, truncated deterministically at 1500 chars), and stores one 384-dim float32 vector per layer. Every search re-checks each candidate layer against the same allowlist at read time, so layers filtered out of the served surface never rank. The published index is **versioned and immutable**:
 
 - `sem:manifest` — one key holding `{ version, layers[], documentCount, publishedAt, embeddingContract, sourceFingerprint, layerDetails }`.
 - `sem:index:<version>:<schema>.<table>.<geometry>` — one key per layer holding the raw float32 vector.

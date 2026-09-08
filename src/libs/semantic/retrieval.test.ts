@@ -331,3 +331,47 @@ describe('RetrievalService — pre-metadata manifest guardrail', () => {
         await expectCode(svc.search('a'), 'INDEX_UNAVAILABLE');
     });
 });
+
+describe('RetrievalService — allowedLayers allowlist seam', () => {
+    async function makeService(allowed: (schema: string, table: string) => boolean) {
+        const fake = new FakeValkey();
+        const storage = new IndexStorage(fake);
+        await publish(storage, 1, LAYERS);
+        const svc = new RetrievalService({
+            storage,
+            contractFingerprint: () => CONTRACT,
+            assertArtifacts: () => undefined,
+            allowedLayers: allowed,
+        });
+        return svc;
+    }
+
+    it('omits layers the allowlist rejects', async () => {
+        const svc = await makeService((_s, table) => table !== 'site_plan');
+        installQueryMock(svc, 1); // site_plan would be the top match on axis 1.
+        const res = await svc.search('jalan');
+        expect(res.results.some((r) => r.catalogId === 'public.site_plan')).toBe(false);
+        expect(res.results.map((r) => r.catalogId).sort()).toEqual(['gis.banjir', 'public.persil_bidang']);
+    });
+
+    it('returns an empty result list (no throw) when every layer is rejected', async () => {
+        const svc = await makeService(() => false);
+        installQueryMock(svc, 0);
+        const res = await svc.search('jalan');
+        expect(res.results).toEqual([]);
+    });
+
+    it('applies the allowlist on top of the schema/geometryType filters', async () => {
+        const svc = await makeService((_s, table) => table !== 'banjir');
+        installQueryMock(svc, 2); // banjir would be the top match on axis 2.
+
+        // banjir matches the schema filter yet stays hidden.
+        const bySchema = await svc.search('x', { schema: 'gis' });
+        expect(bySchema.results).toEqual([]);
+
+        // banjir matches the geometryType filter yet stays hidden; persil remains.
+        const byType = await svc.search('x', { geometryType: 'polygon' });
+        expect(byType.results.some((r) => r.catalogId === 'gis.banjir')).toBe(false);
+        expect(byType.results.some((r) => r.catalogId === 'public.persil_bidang')).toBe(true);
+    });
+});

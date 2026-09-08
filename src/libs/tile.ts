@@ -119,12 +119,7 @@ export function toTileJsonFieldType(columnOrType: ColumnInfoRow | string | undef
 
     if (
         dataType.includes("int") ||
-        ["int2", "int4", "int8", "serial", "bigserial"].includes(udtName)
-    ) {
-        return "Number";
-    }
-
-    if (
+        ["int2", "int4", "int8", "serial", "bigserial"].includes(udtName) ||
         dataType.includes("double") ||
         dataType.includes("numeric") ||
         dataType.includes("real") ||

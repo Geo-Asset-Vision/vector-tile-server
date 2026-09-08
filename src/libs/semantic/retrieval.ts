@@ -53,6 +53,8 @@ export interface RetrievalServiceOptions {
     contractFingerprint?: () => string;
     /** Test seam: skip the on-disk artifact gate. */
     assertArtifacts?: () => void;
+    /** Allowlist gate: return false to hide a layer from every search result. */
+    allowedLayers?: (schemaName: string, tableName: string) => boolean;
 }
 
 interface ScoredLayer {
@@ -102,6 +104,7 @@ export class RetrievalService {
     private readonly storage: Pick<IndexStorage, 'readPublished'>;
     private readonly contractFingerprint: () => string;
     private readonly assertArtifacts: () => void;
+    private readonly allowedLayers: (schemaName: string, tableName: string) => boolean;
     private readonly docCache: LruCache<Float32Array>;
     private readonly queryCache: LruCache<Float32Array>;
     private readonly resultCache: LruCache<SemanticSearchResult[]>;
@@ -110,6 +113,7 @@ export class RetrievalService {
         this.storage = options.storage;
         this.contractFingerprint = options.contractFingerprint ?? modelContractFingerprint;
         this.assertArtifacts = options.assertArtifacts ?? assertLocalModelReady;
+        this.allowedLayers = options.allowedLayers ?? (() => true);
         this.docCache = new LruCache<Float32Array>(semanticEnv.SEMANTIC_DOCUMENT_CACHE_SIZE);
         this.queryCache = new LruCache<Float32Array>(semanticEnv.SEMANTIC_QUERY_CACHE_SIZE);
         this.resultCache = new LruCache<SemanticSearchResult[]>(semanticEnv.SEMANTIC_RESULT_CACHE_SIZE);
@@ -190,7 +194,9 @@ export class RetrievalService {
                         `published manifest lacks metadata for layer ${layerId}; re-run \`pnpm semantic:refresh\``,
                     );
                 }
-                const { schema } = splitLayerId(layerId);
+                const { schema, table } = splitLayerId(layerId);
+                // Frozen-per-process allowlist: hidden layers never rank.
+                if (!this.allowedLayers(schema, table)) continue;
                 if (opts.schema !== undefined && schema !== opts.schema) continue;
                 if (
                     opts.geometryType !== undefined &&

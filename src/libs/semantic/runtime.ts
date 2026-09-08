@@ -17,13 +17,14 @@ import type { RetrievalService } from './retrieval.js';
 let servicePromise: Promise<RetrievalService> | null = null;
 
 async function buildRetrievalService(): Promise<RetrievalService> {
-    const [{ default: env }, { ValkeyClient }, { IndexStorage }, { RetrievalService }, { modelContractFingerprint }] =
+    const [{ default: env }, { ValkeyClient }, { IndexStorage }, { RetrievalService }, { modelContractFingerprint }, { isCatalogAllowed }] =
         await Promise.all([
             import('@/libs/env'),
             import('@/libs/cache/valkey-client.js'),
             import('./index-storage.js'),
             import('./retrieval.js'),
             import('./embedding.js'),
+            import('@/libs/map-config.js'),
         ]);
 
     const valkey = new ValkeyClient({
@@ -43,6 +44,7 @@ async function buildRetrievalService(): Promise<RetrievalService> {
     return new RetrievalService({
         storage,
         contractFingerprint: () => contract,
+        allowedLayers: (schemaName, tableName) => isCatalogAllowed(schemaName, tableName),
     });
 }
 

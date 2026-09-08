@@ -100,4 +100,27 @@ describe("sanitizeWhereParam", () => {
         expect(sanitizeWhereParam("")).toBeNull();
         expect(sanitizeWhereParam("   ")).toBeNull();
     });
+
+    it("should reject literals that do not match a boolean field", () => {
+        const allowed = new Set(["is_active"]);
+        const fieldTypes = { is_active: "boolean" };
+        // "2" is neither TRUE-like nor FALSE-like -> must be rejected, not coerced to FALSE
+        expect(sanitizeWhereParam("is_active = 2", { allowedFields: allowed, fieldTypes })).toBeNull();
+        expect(sanitizeWhereParam("is_active = 'yes'", { allowedFields: allowed, fieldTypes })).toBeNull();
+    });
+
+    it("should lowercase TRUE/FALSE literals for string fields", () => {
+        const allowed = new Set(["flag"]);
+        const fieldTypes = { flag: "text" };
+        // bare TRUE/FALSE on a text column must render lowercase ('true'/'false'), not uppercase
+        expect(sanitizeWhereParam("flag = TRUE", { allowedFields: allowed, fieldTypes })).toBe('"flag" = \'true\'');
+        expect(sanitizeWhereParam("flag = FALSE", { allowedFields: allowed, fieldTypes })).toBe('"flag" = \'false\'');
+    });
+
+    it("should reject non-string ESCAPE literals", () => {
+        const allowed = new Set(["name"]);
+        // ESCAPE must be a quoted string literal; numeric/bare tokens are rejected
+        expect(sanitizeWhereParam("name LIKE 'A%' ESCAPE 5", { allowedFields: allowed })).toBeNull();
+        expect(sanitizeWhereParam("name LIKE 'A%' ESCAPE TRUE", { allowedFields: allowed })).toBeNull();
+    });
 });

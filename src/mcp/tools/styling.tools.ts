@@ -15,7 +15,7 @@ export function registerStylingTools(server: McpServer) {
         },
         async ({ catalog_id, where }) => {
             let tilesUrl = `${env.APP_BASE_URL}/tiles/${catalog_id}/{z}/{x}/{y}`;
-            if (where && where.trim().length > 0) {
+            if (where?.trim()) {
                 tilesUrl += `?where=${encodeURIComponent(where.trim())}`;
             }
 
@@ -67,6 +67,7 @@ export function registerStylingTools(server: McpServer) {
                 const tileJson = await getTileJSONDetail(catalog_id, { where });
                 const sourceId = catalog_id.replace(/[^a-zA-Z0-9_-]/g, "_");
                 const defaultSourceLayer = tileJson.vector_layers[0]?.id || catalog_id.split(".").pop() || catalog_id;
+                const sourceUrl = `${env.APP_BASE_URL}/catalog/${catalog_id}${where ? `?where=${encodeURIComponent(where)}` : ""}`;
 
                 let paintProps: Record<string, unknown> = {};
 
@@ -96,7 +97,7 @@ export function registerStylingTools(server: McpServer) {
                     source_definition: {
                         [sourceId]: {
                             type: "vector",
-                            url: `${env.APP_BASE_URL}/catalog/${catalog_id}${where ? `?where=${encodeURIComponent(where)}` : ""}`,
+                            url: sourceUrl,
                         },
                     },
                     layer_definition: {
@@ -111,7 +112,7 @@ export function registerStylingTools(server: McpServer) {
                     maplibre_js_snippet: `
 map.addSource('${sourceId}', {
   type: 'vector',
-  url: '${env.APP_BASE_URL}/catalog/${catalog_id}${where ? `?where=${encodeURIComponent(where)}` : ""}'
+  url: '${sourceUrl}'
 });
 
 map.addLayer(${JSON.stringify(

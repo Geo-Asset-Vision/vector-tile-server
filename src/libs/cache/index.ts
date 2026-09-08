@@ -11,9 +11,7 @@ export * from "./single-flight";
 export * from "./two-level-cache";
 export * from "./metrics";
 
-// Determine if Valkey is configured and enabled
-const isValkeyConfigured = Boolean(env.VALKEY_HOST || env.VALKEY_URL);
-const isL2Enabled = env.MVT_CACHE_L2_ENABLED && isValkeyConfigured;
+const isL2Enabled = env.MVT_CACHE_L2_ENABLED && Boolean(env.VALKEY_HOST || env.VALKEY_URL);
 
 export const tileCache = new TwoLevelTileCache({
     enabled: env.MVT_CACHE_ENABLED,
@@ -42,7 +40,6 @@ export const tileCache = new TwoLevelTileCache({
     },
 });
 
-// Auto-connect L2 if Valkey is configured and enabled
 if (isL2Enabled) {
     tileCache.connect().catch(() => {
         // Handled internally by ValkeyClient

@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "start:mcp": "node dist/mcp/stdio.js",
     "generate:api-key": "tsx scripts/generate-api-key.ts",
+    "seed": "tsx scripts/seed-sample-data.ts",
+    "seed:sample-data": "tsx scripts/seed-sample-data.ts",
     "semantic:prefetch": "tsx scripts/prefetch-semantic-model.ts",
     "semantic:refresh": "tsx scripts/refresh-semantic-index.ts",
     "semantic:benchmark": "tsx scripts/benchmark-semantic.ts",
@@ -37,11 +39,13 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
     "@types/mapbox__vector-tile": "^2.0.0",
     "@types/node": "^26.1.1",
     "@types/pbf": "^3.0.5",
     "@types/pg": "^8.21.0",
     "oxlint": "^1.78.0",
+    "pbf": "^3.2.1",
     "tsup": "^8.5.1",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2",

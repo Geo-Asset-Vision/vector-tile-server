@@ -1,6 +1,40 @@
 import env from "@/libs/env";
 import { rateLimiter } from "@/libs/rate-limiter";
-import type { Context, Next } from "hono";
+import type { Context, MiddlewareHandler, Next } from "hono";
+import { cors } from "hono/cors";
+
+export function createCorsMiddleware(allowedOriginsInput?: string): MiddlewareHandler {
+    const corsOrigins = (allowedOriginsInput ?? "")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean);
+
+    const allowAllOrigins = corsOrigins.includes("*");
+
+    if (allowAllOrigins) {
+        return cors({
+            origin: "*",
+            exposeHeaders: ["Content-Type", "Cache-Control"],
+        });
+    }
+
+    if (corsOrigins.length > 0) {
+        return cors({
+            origin: corsOrigins,
+            exposeHeaders: ["Content-Type", "Cache-Control"],
+        });
+    }
+
+    return async (c, next) => {
+        const origin = c.req.header("Origin");
+        // Same-origin requests carry no Origin header; reject cross-origin browser access
+        // when no allowlist is configured so the browser cannot read tile bytes directly.
+        if (origin) {
+            return c.json({ error: "Forbidden" }, 403);
+        }
+        await next();
+    };
+}
 
 export function getClientIP(c: Context): string {
     const forwarded = c.req.header("x-forwarded-for");
@@ -17,7 +51,6 @@ export async function withAPIKey(c: Context, next: Next) {
 
     const ip = getClientIP(c);
 
-    // 1. Check if IP is currently blocked due to rate limit
     const checkResult = await rateLimiter.check(ip);
     if (checkResult.blocked) {
         c.header("Retry-After", String(checkResult.retryAfterSec || 60));
@@ -32,7 +65,6 @@ export async function withAPIKey(c: Context, next: Next) {
     const bearerKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
     const apiKey = c.req.header("X-API-Key") || bearerKey || c.req.query("apiKey") || c.req.query("api_key");
 
-    // 2. Validate API Key
     if (!apiKey || apiKey !== env.API_KEY) {
         const failure = await rateLimiter.recordFailure(ip);
 
@@ -48,7 +80,6 @@ export async function withAPIKey(c: Context, next: Next) {
         return c.json({ error: "Unauthorized" }, 401);
     }
 
-    // 3. Reset strikes/attempts on successful authorization
     await rateLimiter.recordSuccess(ip);
 
     return next();

@@ -3,7 +3,7 @@ import { getTile } from "@/services/tile.service";
 import env from "@/libs/env";
 
 export async function getTileController(c: Context) {
-    const catalogId = c.req.param("catalog_id") || c.req.param("id");
+    const catalogId = c.req.param("catalog_id");
     const rawZ = c.req.param("z");
     const rawX = c.req.param("x");
     const rawY = c.req.param("y");

@@ -76,7 +76,7 @@ describe("API Routes Integration Tests", () => {
         const mockTileJson = {
             tilejson: "3.0.0",
             name: "public.buildings",
-            tiles: ["http://localhost:3000/tiles/public.buildings/{z}/{x}/{y}"],
+            tiles: ["http://localhost:4000/tiles/public.buildings/{z}/{x}/{y}"],
             vector_layers: [],
         };
 

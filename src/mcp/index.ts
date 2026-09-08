@@ -14,7 +14,6 @@ export function createVectorTileMcpServer(): McpServer {
         version: "1.0.0",
     });
 
-    // Register all tool groups
     registerCatalogTools(server);
     registerSpatialTools(server);
     registerInspectTools(server);

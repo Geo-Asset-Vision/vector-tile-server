@@ -11,12 +11,13 @@ services:
     container_name: vector-tile-server
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-4000}:${APP_PORT:-4000}"
     environment:
-      APP_PORT: ${APP_PORT:-3000}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000/}
-      POSTGIS_HOST: ${POSTGIS_HOST:-db}
-      POSTGIS_PORT: ${POSTGIS_PORT:-5432}
+      APP_PORT: ${APP_PORT:-4000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:4000/}
+      # Service-to-service values; host-published .env values do not apply here.
+      POSTGIS_HOST: db
+      POSTGIS_PORT: 5432
       POSTGIS_DB: ${POSTGIS_DB:-vtserver}
       POSTGIS_USER: ${POSTGIS_USER:-vtserver}
       POSTGIS_PASSWORD: ${POSTGIS_PASSWORD:-vtserver}
@@ -28,6 +29,11 @@ services:
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
       RATE_LIMIT_MAX_ATTEMPTS: ${RATE_LIMIT_MAX_ATTEMPTS:-5}
       RATE_LIMIT_BASE_BLOCK_SEC: ${RATE_LIMIT_BASE_BLOCK_SEC:-60}
+      ALLOWED_SCHEMAS: ${ALLOWED_SCHEMAS:-}
+      ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-}
+      STABLE_ID_COLUMNS: ${STABLE_ID_COLUMNS:-}
+      PUBLIC_TILE_BASE_URL: ${PUBLIC_TILE_BASE_URL:-http://localhost:4000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy
@@ -36,7 +42,7 @@ services:
     networks:
       - vtserver-network
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-3000}/ || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-4000}/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

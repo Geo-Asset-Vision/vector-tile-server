@@ -12,7 +12,7 @@ export function registerCacheTools(server: McpServer) {
                 format: z.enum(["json", "prometheus"]).default("json").describe("Output format: 'json' for structured object, 'prometheus' for plain text exposition"),
             },
         },
-        async ({ format = "json" }) => {
+        async ({ format }) => {
             try {
                 const dbHealthy = await checkConnection();
                 const snapshot = cacheMetrics.getSnapshot();
@@ -94,9 +94,9 @@ export function registerCacheTools(server: McpServer) {
                             },
                         ],
                     };
-                } else {
-                    tileCache.l1Cache.clear();
-                    return {
+                }
+                tileCache.l1Cache.clear();
+                return {
                         content: [
                             {
                                 type: "text",
@@ -111,7 +111,6 @@ export function registerCacheTools(server: McpServer) {
                             },
                         ],
                     };
-                }
             } catch (error) {
                 return {
                     isError: true,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
-import { withAPIKey } from "../src/middleware";
+import { withAPIKey, createCorsMiddleware } from "../src/middleware";
 import env from "../src/libs/env";
 
 describe("withAPIKey Middleware", () => {
@@ -100,5 +100,90 @@ describe("withAPIKey Middleware", () => {
 
         env.API_KEY = originalKey;
         env.RATE_LIMIT_MAX_ATTEMPTS = originalMax;
+    });
+});
+
+describe("createCorsMiddleware", () => {
+    it("should allow any origin when wildcard '*' is configured", async () => {
+        const app = new Hono();
+        app.use("*", createCorsMiddleware("*"));
+        app.get("/catalog/test", (c) => c.json({ ok: true }));
+
+        const res = await app.request("/catalog/test", {
+            headers: { Origin: "https://maputnik.github.io" },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    });
+
+    it("should handle preflight OPTIONS with wildcard '*'", async () => {
+        const app = new Hono();
+        app.use("*", createCorsMiddleware("*"));
+        app.get("/catalog/test", (c) => c.json({ ok: true }));
+
+        const res = await app.request("/catalog/test", {
+            method: "OPTIONS",
+            headers: {
+                Origin: "https://maputnik.github.io",
+                "Access-Control-Request-Method": "GET",
+            },
+        });
+
+        expect(res.status).toBe(204);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    });
+
+    it("should allow specific origins in allowlist", async () => {
+        const app = new Hono();
+        app.use("*", createCorsMiddleware("https://maputnik.github.io, http://localhost:8888"));
+        app.get("/catalog/test", (c) => c.json({ ok: true }));
+
+        // Allowed 1
+        const res1 = await app.request("/catalog/test", {
+            headers: { Origin: "https://maputnik.github.io" },
+        });
+        expect(res1.status).toBe(200);
+        expect(res1.headers.get("access-control-allow-origin")).toBe("https://maputnik.github.io");
+
+        // Allowed 2
+        const res2 = await app.request("/catalog/test", {
+            headers: { Origin: "http://localhost:8888" },
+        });
+        expect(res2.status).toBe(200);
+        expect(res2.headers.get("access-control-allow-origin")).toBe("http://localhost:8888");
+
+        // Disallowed origin
+        const res3 = await app.request("/catalog/test", {
+            headers: { Origin: "https://unauthorized-domain.com" },
+        });
+        expect(res3.status).toBe(200);
+        expect(res3.headers.get("access-control-allow-origin")).toBeNull();
+    });
+
+    it("should reject cross-origin requests with 403 when allowlist is empty", async () => {
+        const app = new Hono();
+        app.use("*", createCorsMiddleware(""));
+        app.get("/catalog/test", (c) => c.json({ ok: true }));
+
+        // Cross-origin request has Origin header -> 403
+        const res = await app.request("/catalog/test", {
+            headers: { Origin: "https://maputnik.github.io" },
+        });
+        expect(res.status).toBe(403);
+        const json = await res.json();
+        expect(json).toEqual({ error: "Forbidden" });
+    });
+
+    it("should allow same-origin / non-browser requests when allowlist is empty", async () => {
+        const app = new Hono();
+        app.use("*", createCorsMiddleware(""));
+        app.get("/catalog/test", (c) => c.json({ ok: true }));
+
+        // Same-origin / server-to-server request (no Origin header) -> 200
+        const res = await app.request("/catalog/test");
+        expect(res.status).toBe(200);
+        const json = await res.json();
+        expect(json).toEqual({ ok: true });
     });
 });

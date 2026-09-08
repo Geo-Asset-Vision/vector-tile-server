@@ -59,8 +59,8 @@ export class TwoLevelTileCache {
         this.enabled = options.enabled ?? true;
         this.singleFlightEnabled = options.singleFlightEnabled ?? true;
 
-        const baseL1Ttl = options.l1TtlSeconds ?? 60; // 1 minute default
-        const baseL2Ttl = options.l2TtlSeconds ?? 60; // 1 minute default
+        const baseL1Ttl = options.l1TtlSeconds ?? 60;
+        const baseL2Ttl = options.l2TtlSeconds ?? 60;
         const emptyTtl = options.emptyTtlSeconds ?? 15;
         const jitter = options.ttlJitterSeconds ?? 10;
 
@@ -96,7 +96,6 @@ export class TwoLevelTileCache {
 
     private applyJitter(baseMs: number): number {
         if (this.ttlJitterMs <= 0) return baseMs;
-        // Jitter: baseMs ± (random between 0 and ttlJitterMs)
         const delta = Math.floor((Math.random() * 2 - 1) * this.ttlJitterMs);
         return Math.max(1000, baseMs + delta);
     }
@@ -122,7 +121,6 @@ export class TwoLevelTileCache {
         compute: () => Promise<Buffer>,
         options: GetOrComputeOptions = {}
     ): Promise<TileCacheResult> {
-        // Handle explicit cache bypass
         if (!this.enabled || options.bypass) {
             cacheMetrics.recordBypass();
             const data = await compute();
@@ -135,7 +133,6 @@ export class TwoLevelTileCache {
             };
         }
 
-        // 1. Check L1 Cache
         const l1Data = this.l1.get(key);
         if (l1Data !== null) {
             const isEmpty = l1Data.length === 0;
@@ -147,7 +144,6 @@ export class TwoLevelTileCache {
             };
         }
 
-        // 2. Check L2 Cache (Valkey)
         let l2Data: Buffer | null = null;
         try {
             l2Data = await this.l2.get(key);
@@ -169,7 +165,6 @@ export class TwoLevelTileCache {
             };
         }
 
-        // 3. Cache MISS: Compute via Single-Flight
         const computeWrapper = async (): Promise<Buffer> => {
             const startTime = Date.now();
             const data = await compute();
@@ -179,7 +174,6 @@ export class TwoLevelTileCache {
             const isEmpty = !data || data.length === 0;
             const bufferToStore = isEmpty ? Buffer.alloc(0) : data;
 
-            // Calculate TTL with jitter or negative TTL for empty tiles
             let l1Ttl: number;
             let l2Ttl: number;
 
@@ -193,13 +187,10 @@ export class TwoLevelTileCache {
                 l2Ttl = this.applyJitter(baseL2);
             }
 
-            // Populate L1 synchronously
             this.l1.set(key, bufferToStore, l1Ttl);
 
-            // Populate L2 asynchronously without blocking or failing the request
-            this.l2.set(key, bufferToStore, l2Ttl).catch(() => {
-                // Suppress L2 background write errors
-            });
+            // L2 is a background write; keep its failure out of the request path
+            this.l2.set(key, bufferToStore, l2Ttl).catch(() => {});
 
             return bufferToStore;
         };

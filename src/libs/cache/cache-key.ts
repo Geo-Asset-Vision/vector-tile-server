@@ -55,7 +55,6 @@ export function validateTileCoordinates(z: number, x: number, y: number): void {
 export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): CanonicalFilterObject {
     const canonical: CanonicalFilterObject = {};
 
-    // 1. Where clause (trimmed)
     if (params.where && typeof params.where === "string") {
         const trimmed = params.where.trim();
         if (trimmed.length > 0) {
@@ -63,7 +62,6 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
     }
 
-    // 2. Geometry column
     if (params.geom && typeof params.geom === "string") {
         const trimmed = params.geom.trim();
         if (trimmed.length > 0) {
@@ -71,7 +69,6 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
     }
 
-    // 3. Properties list (sorted and deduplicated)
     if (params.properties) {
         let propList: string[] = [];
         if (Array.isArray(params.properties)) {
@@ -84,12 +81,10 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
 
         if (propList.length > 0) {
-            // Deduplicate and sort deterministically
             canonical.properties = Array.from(new Set(propList)).sort();
         }
     }
 
-    // 4. Extent (standardized number)
     if (params.extent !== undefined && params.extent !== null) {
         const extentNum = Number(params.extent);
         if (Number.isFinite(extentNum)) {
@@ -97,7 +92,6 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
     }
 
-    // 5. Buffer (standardized number)
     if (params.buffer !== undefined && params.buffer !== null) {
         const bufferNum = Number(params.buffer);
         if (Number.isFinite(bufferNum)) {
@@ -105,12 +99,10 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
     }
 
-    // 6. Clip (boolean)
     if (params.clip !== undefined && params.clip !== null) {
         canonical.clip = Boolean(params.clip);
     }
 
-    // 7. Custom layer name
     if (params.layerName && typeof params.layerName === "string") {
         const trimmed = params.layerName.trim();
         if (trimmed.length > 0) {
@@ -118,7 +110,6 @@ export function canonicalizeQueryParams(params: Partial<CacheKeyParams>): Canoni
         }
     }
 
-    // 8. Multi-tenant / security scope
     if (params.tenantId && typeof params.tenantId === "string") {
         const trimmed = params.tenantId.trim();
         if (trimmed.length > 0) {

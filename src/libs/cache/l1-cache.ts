@@ -15,7 +15,7 @@ export class L1TileCache {
 
     constructor(options: L1TileCacheOptions = {}) {
         this.enabled = options.enabled ?? true;
-        this.defaultTtlMs = options.ttlMs ?? 60 * 1000; // default 60s
+        this.defaultTtlMs = options.ttlMs ?? 60 * 1000;
 
         const maxSizeMb = options.maxSizeMb ?? 256;
         const maxSizeBytes = Math.max(1, Math.floor(maxSizeMb * 1024 * 1024));
@@ -24,13 +24,12 @@ export class L1TileCache {
         this.cache = new LRUCache<string, Buffer>({
             max: maxItems,
             maxSize: maxSizeBytes,
-            sizeCalculation: (value: Buffer) => (value ? value.byteLength : 0),
+            sizeCalculation: (value: Buffer) => value.byteLength,
             ttl: this.defaultTtlMs,
             allowStale: false,
             updateAgeOnGet: true,
         });
 
-        // Register metrics suppliers
         cacheMetrics.registerL1Suppliers(
             () => this.calculatedSize,
             () => this.itemCount
@@ -48,16 +47,10 @@ export class L1TileCache {
         }
     }
 
-    /**
-     * Total allocated bytes in the LRU cache.
-     */
     get calculatedSize(): number {
         return this.cache.calculatedSize;
     }
 
-    /**
-     * Total number of stored items in LRU cache.
-     */
     get itemCount(): number {
         return this.cache.size;
     }
@@ -81,11 +74,8 @@ export class L1TileCache {
         return null;
     }
 
-    /**
-     * Store tile Buffer into L1 cache with optional custom TTL.
-     */
     set(key: string, value: Buffer, ttlMs?: number): void {
-        if (!this.enabled || !value) {
+        if (!this.enabled) {
             return;
         }
 

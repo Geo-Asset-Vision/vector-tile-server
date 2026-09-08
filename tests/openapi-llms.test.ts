@@ -17,7 +17,7 @@ describe("OpenAPI & LLMs Markdown Integration Tests", () => {
             },
             servers: [
                 {
-                    url: "http://localhost:3000",
+                    url: "http://localhost:4000",
                     description: "Test Environment URL",
                 },
             ],
