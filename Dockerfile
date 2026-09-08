@@ -46,7 +46,7 @@ FROM node:22-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV APP_PORT=3000
+ENV APP_PORT=4000
 
 # wget is used by the healthcheck (Debian slim has no wget/curl).
 RUN apt-get update && apt-get install -y --no-install-recommends wget \
@@ -68,7 +68,7 @@ COPY --from=builder /app/dist ./dist
 RUN chown -R node:node /app
 USER node
 
-EXPOSE 3000
+EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT}/ || exit 1

@@ -17,8 +17,8 @@ config({
 })
 
 const envSchema = z.object({
-    APP_PORT: z.string().default('3000').transform(Number),
-    APP_BASE_URL: z.string().default('http://localhost:3000/').transform((val) => val.endsWith('/') ? val.slice(0, -1) : val),
+    APP_PORT: z.string().default('4000').transform(Number),
+    APP_BASE_URL: z.string().default('http://localhost:4000/').transform((val) => val.endsWith('/') ? val.slice(0, -1) : val),
     POSTGIS_HOST: z.string().default('localhost'),
     POSTGIS_PORT: z.string().default('5432').transform(Number),
     POSTGIS_DB: z.string().default('vtserver'),

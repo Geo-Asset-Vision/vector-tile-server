@@ -38,7 +38,7 @@ describe("Catalog & Tile Zod Schemas", () => {
             maxzoom: 22,
             bounds: [-180, -85, 180, 85],
             center: [0, 0, 6],
-            tiles: ["http://localhost:3000/tiles/public.buildings/{z}/{x}/{y}"],
+            tiles: ["http://localhost:4000/tiles/public.buildings/{z}/{x}/{y}"],
             vector_layers: [
                 {
                     id: "buildings",
