@@ -457,10 +457,10 @@ Behavior (exit code non-zero on any typed failure — never a silent success):
 
 - Traverses the PostGIS catalog, builds canonical documents, and diffs them **by fingerprint** (SHA-256 over the canonical passage + embedding contract) against the currently published version.
 - **Changed/new layers** are re-embedded in one batched pipeline call; **unchanged layers** reuse the stored vector; **removed layers** disappear when the superseded namespace is purged.
-- **No-op rerun** (byte-identical catalog): prints `catalog unchanged — version N still current (M layers, all reused)` and publishes nothing.
+- **No-op rerun** (byte-identical catalog **and** unchanged embedding contract): prints `catalog unchanged — version N still current (M layers, all reused)` and publishes nothing.
 - First refresh publishes `v1`; a real change publishes `vN+1` (old namespace purged after the manifest overwrite — readers observe exactly one version).
-- **Code-level contract change** (model id / dimension / pooling / normalize flag in `EMBEDDING_CONTRACT`) changes every layer fingerprint, so the next `pnpm semantic:refresh` re-embeds the whole catalog and republishes under the new `embeddingContract`. Until that refresh runs, searches fail with `VERSION_MISMATCH`.
-- **Artifact drift** (e.g. a corrupted or partially re-downloaded model under `SEMANTIC_MODEL_DIR` changes the on-disk artifact fingerprint while layer passages are unchanged): `pnpm semantic:refresh` reports the catalog unchanged and does *not* republish; retrieval detects the mismatch and fails with `VERSION_MISMATCH` until the artifacts are restored/provisioned cleanly and refresh is re-run. The refresh CLI itself never silently re-embeds under a drifted contract — it only ever publishes when layer content changed.
+- **Model contract change / artifact drift** (a re-provisioned or altered model under `SEMANTIC_MODEL_DIR` makes `modelContractFingerprint()` differ from the manifest's `embeddingContract`, even when the catalog is byte-identical): the next `pnpm semantic:refresh` detects the drift and triggers a **full reindex automatically** — every layer is re-embedded (0 reused — old vectors were produced by a different model), a new version is published, and the new `embeddingContract` is recorded in the manifest. This is the recovery path for the read-side `VERSION_MISMATCH`: no manual steps beyond running the refresh.
+- **Read-side safety is unchanged**: until that refresh runs, searches compare the local fingerprint against the manifest and fail with `VERSION_MISMATCH` rather than ever ranking with mismatched model vectors.
 
 **Reindex triggers** — a refresh re-embeds a layer when its fingerprint changes. The fingerprint covers the canonical passage + embedding contract, so it changes when any of the following changes:
 
@@ -470,9 +470,9 @@ Behavior (exit code non-zero on any typed failure — never a silent success):
 | **Fields** included in the document | adding/renaming a column |
 | **Geometry type or geometry column** name | `geom` → `geom_4326` |
 | **Schema/table** rename | `public.site_plan` → `gis.site_plan` |
-| **Model contract** change | new model id, dimension, pooling, or normalize flag in `EMBEDDING_CONTRACT` → every fingerprint changes → the next refresh fully re-embeds under the new `embeddingContract`. |
+| **Model contract** change | new model id, dimension, pooling, or normalize flag in `EMBEDDING_CONTRACT`, **or** re-provisioned/altered on-disk artifacts → `pnpm semantic:refresh` fully re-embeds under the new `embeddingContract` and republishes. |
 
-Until refresh republishes after a code-level contract change, searches fail with `VERSION_MISMATCH` (the operator must run `pnpm semantic:refresh` to record the new contract in the manifest).
+Until that refresh runs, searches fail with `VERSION_MISMATCH`; running `pnpm semantic:refresh` records the new contract in the manifest and restores search (no other manual step).
 
 ### Benchmark
 
@@ -544,7 +544,7 @@ Each `result` carries only `layer {schema, table, geometry}`, `catalogId` (`sche
 | `INDEX_NOT_FOUND` | No manifest published yet — run `pnpm semantic:refresh`. |
 | `INDEX_UNAVAILABLE` | Store unconfigured/disconnected, circuit `DEGRADED`, or a missing/corrupt vector — check Valkey, then `pnpm semantic:refresh`. |
 | `MODEL_UNAVAILABLE` | Local model artifacts missing — run `pnpm semantic:prefetch` on the host (or bake the model into the image); the runtime never downloads. |
-| `VERSION_MISMATCH` | Stored index was embedded under a model contract different from the local artifacts — restore/provision the matching model (`pnpm semantic:prefetch`), then re-run `pnpm semantic:refresh`. |
+| `VERSION_MISMATCH` | Stored index was embedded under a model contract different from the local artifacts — if the current model is intended, run `pnpm semantic:refresh` (detects the drift and full-reindexes, publishing a new version under the new contract); if not, restore/provision the matching model and refresh. |
 | `INVALID_ARGS` | Blank query / out-of-range `top_k` (invalid requests are also rejected by the Zod schema before the handler). |
 | `EMBEDDING_FAILED` | Model output violates the contract — artifact may be corrupted; re-run `pnpm semantic:prefetch`. |
 | `INTERNAL` | Unexpected failure. |

@@ -16,7 +16,12 @@
  * manifest stores `embeddingContract` (the model-contract fingerprint) so
  * retrieval can detect model drift. A catalog byte-identical to the current
  * version publishes nothing — no-op refreshes must not churn immutable
- * versions. No network, no SCAN: traversal is the only source of truth.
+ * versions — UNLESS the embedding contract drifted: a re-provisioned model
+ * means every stored vector was produced under the old contract, so a full
+ * reindex (all layers re-embedded, next version, new `embeddingContract`
+ * recorded) is required; otherwise retrieval would throw VERSION_MISMATCH
+ * forever with no recovery path. No network, no SCAN: traversal is the only
+ * source of truth.
  */
 import { createHash } from 'node:crypto';
 
@@ -133,16 +138,34 @@ export async function refreshSemanticIndex(
     //    (same id, new fingerprint) is both a "removed old fingerprint" and an
     //    "added new one" — counting would double-count or go negative.
     const currentFingerprints = new Set(traversed.map((t) => t.doc.fingerprint));
-    const changed = traversed.filter((t) => !previousFingerprints.has(t.doc.fingerprint));
+    let changed = traversed.filter((t) => !previousFingerprints.has(t.doc.fingerprint));
     let removedCount = 0;
     for (const fp of previousFingerprints) {
         if (!currentFingerprints.has(fp)) removedCount += 1;
     }
-    const reusedCount = traversed.length - changed.length;
+    let reusedCount = traversed.length - changed.length;
+
+    // Contract drift: the operator re-provisioned the model (new artifact
+    // fingerprint / embedding contract) but the catalog is byte-identical.
+    // Under the old contract every layer fingerprint was identical too — yet
+    // the stored vectors were embedded by the OLD model and reusing them for a
+    // NEW contract would be wrong (different model => different vectors for the
+    // same passage). A no-op short-circuit here would leave the manifest
+    // holding the stale embeddingContract and retrieval would throw
+    // VERSION_MISMATCH forever (no version bump can ever record the new
+    // contract). Treat EVERY current layer as changed: full reindex, publish
+    // the next version with the new embeddingContract.
+    const contractDrifted =
+        old.status === 'ok' && old.manifest.embeddingContract !== options.embeddingContract;
 
     // A fresh store is always a publish (v1). Otherwise a byte-identical
-    // catalog must not churn versions.
-    if (old.status === 'ok' && changed.length === 0 && removedCount === 0) {
+    // catalog under the SAME contract must not churn versions.
+    if (
+        old.status === 'ok' &&
+        !contractDrifted &&
+        changed.length === 0 &&
+        removedCount === 0
+    ) {
         return {
             version: old.version,
             published: false,
@@ -154,7 +177,15 @@ export async function refreshSemanticIndex(
         };
     }
 
+    // Contract drift invalidates every stored vector, so nothing is reusable.
+    // removedCount stays as computed from fingerprints above.
+    if (contractDrifted) {
+        changed = traversed;
+        reusedCount = 0; // all layers are re-embedded, none copied forward
+    }
+
     // 4. Embed ONLY the changed/new passages — one batched pipeline call.
+    //    (A contract drift re-embeds the whole catalog.)
     const changedVectors =
         changed.length > 0 ? await seams.embedBatch(changed.map((t) => t.doc.passage)) : [];
 

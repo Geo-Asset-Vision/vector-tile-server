@@ -40,7 +40,12 @@ function unitVec(axis: number): Float32Array {
 /** Mock seams harness with an in-memory "current" state, like a real store. */
 function makeHarness(initialLayers: ITableGeomLayerResult[] = []) {
     let currentLayers = initialLayers;
-    let published: { version: number; docs: Map<string, Float32Array>; details: Record<string, CatalogLayerDetail> } | null = null;
+    let published: {
+        version: number;
+        docs: Map<string, Float32Array>;
+        details: Record<string, CatalogLayerDetail>;
+        contract: string;
+    } | null = null;
     let embedCalls: string[][] = [];
 
     const seams: RefreshSeams = {
@@ -68,7 +73,7 @@ function makeHarness(initialLayers: ITableGeomLayerResult[] = []) {
                     layers: [...published.docs.keys()],
                     documentCount: published.docs.size,
                     publishedAt: new Date().toISOString(),
-                    embeddingContract: 'contract',
+                    embeddingContract: published.contract,
                     layerDetails: published.details,
                 },
                 documents: published.docs,
@@ -76,7 +81,12 @@ function makeHarness(initialLayers: ITableGeomLayerResult[] = []) {
         }),
         writeNew: vi.fn(async (version, docs, opts): Promise<IndexWriteResult> => {
             const details: Record<string, CatalogLayerDetail> = opts.layerDetails;
-            published = { version, docs: new Map(docs), details };
+            published = {
+                version,
+                docs: new Map(docs),
+                details,
+                contract: opts.embeddingContract ?? '',
+            };
             return { status: 'ok', version, documents: docs.size, previousVersion: version - 1, purgedKeys: 0 };
         }),
         embedBatch: vi.fn(async (texts: string[]): Promise<Float32Array[]> => {
@@ -93,7 +103,7 @@ function makeHarness(initialLayers: ITableGeomLayerResult[] = []) {
         setLayers(layers: ITableGeomLayerResult[]) {
             currentLayers = layers;
         },
-        async publish(v: number, layers: ITableGeomLayerResult[]) {
+        async publish(v: number, layers: ITableGeomLayerResult[], contract = 'contract') {
             const docs = new Map<string, Float32Array>();
             const details: Record<string, CatalogLayerDetail> = {};
             for (const l of layers) {
@@ -105,7 +115,7 @@ function makeHarness(initialLayers: ITableGeomLayerResult[] = []) {
                     ...(l.table_description ? { tableDescription: l.table_description } : {}),
                 };
             }
-            published = { version: v, docs, details };
+            published = { version: v, docs, details, contract };
         },
     };
 }
@@ -286,5 +296,59 @@ describe('refreshSemanticIndex — unit', () => {
         expect(summary.removed).toBe(2); // exact count of gone fingerprints
         expect(summary.embedded).toBe(0); // nothing new, kept layer reused
         expect(summary.layersCount).toBe(1);
+    });
+
+    it('full-reindexes on embedding-contract drift: identical catalog, contract A -> B publishes v2 with every layer re-embedded', async () => {
+        const layers = [
+            makeLayerRow({ schema: 'public', table: 'roads', desc: 'Jalan raya' }),
+            makeLayerRow({ schema: 'gis', table: 'parcels', type: 'MultiPolygon' }),
+        ];
+        const h = makeHarness(layers);
+        // Published v1 under contract A.
+        await h.publish(1, layers, 'contract-A');
+
+        // Byte-identical catalog, but the model was re-provisioned (contract B).
+        // The old no-op short-circuit would leave the manifest on contract A and
+        // retrieval would VERSION_MISMATCH forever. Must publish v2 with the new
+        // contract, re-embedding EVERY layer (0 reused — old vectors were produced
+        // by a different model and are not interchangeable).
+        const summary = await refreshSemanticIndex(h.seams, { embeddingContract: 'contract-B' });
+        expect(summary.published).toBe(true);
+        expect(summary.version).toBe(2);
+        expect(summary.embedded).toBe(2); // all layers re-embedded
+        expect(summary.reused).toBe(0); // nothing copied forward
+        expect(summary.removed).toBe(0); // fingerprints all still present
+        expect(summary.layersCount).toBe(2);
+        expect(h.embedCalls).toHaveLength(1);
+        expect(h.embedCalls[0]).toHaveLength(2); // one batch, both passages
+        // The published manifest now records contract B.
+        const writeArgs = (h.seams.writeNew as ReturnType<typeof vi.fn>).mock.calls[0] as [
+            number,
+            Map<string, Float32Array>,
+            { embeddingContract: string; layerDetails: Record<string, CatalogLayerDetail> },
+        ];
+        expect(writeArgs[0]).toBe(2);
+        expect(writeArgs[2].embeddingContract).toBe('contract-B');
+        // Every layer carries fresh details in the new manifest.
+        expect(Object.keys(writeArgs[2].layerDetails)).toHaveLength(2);
+
+        // A subsequent refresh under the SAME (now-recorded) contract with an
+        // identical catalog is a normal no-op again — no version churn.
+        const noop = await refreshSemanticIndex(h.seams, { embeddingContract: 'contract-B' });
+        expect(noop.published).toBe(false);
+        expect(noop.version).toBe(2);
+    });
+
+    it('still no-ops (published:false) when the catalog is identical AND the contract is equal', async () => {
+        const layers = [makeLayerRow({ schema: 'public', table: 'roads', desc: 'Jalan raya' })];
+        const h = makeHarness(layers);
+        await h.publish(1, layers, 'contract');
+
+        const summary = await refreshSemanticIndex(h.seams, { embeddingContract: 'contract' });
+        expect(summary.published).toBe(false);
+        expect(summary.version).toBe(1);
+        expect(summary.reused).toBe(1);
+        expect(h.embedCalls).toHaveLength(0);
+        expect(h.seams.writeNew).not.toHaveBeenCalled();
     });
 });
