@@ -9,6 +9,7 @@
     "start:mcp": "node dist/mcp/stdio.js",
     "generate:api-key": "tsx scripts/generate-api-key.ts",
     "semantic:prefetch": "tsx scripts/prefetch-semantic-model.ts",
+    "semantic:refresh": "tsx scripts/refresh-semantic-index.ts",
     "lint": "oxlint src scripts",
     "lint:fix": "oxlint --fix src scripts",
     "test": "vitest run",

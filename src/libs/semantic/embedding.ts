@@ -110,6 +110,11 @@ function assertArtifactsPresent(): void {
     }
 }
 
+/** Public presence gate — retrieval asserts artifacts BEFORE reading the index. */
+export function assertLocalModelReady(): void {
+    assertArtifactsPresent();
+}
+
 
 function unavailable(err: unknown): SemanticSearchError {
     if (err instanceof SemanticSearchError) return err;
@@ -153,28 +158,32 @@ function lazyExtractor(): Promise<FeatureExtractionPipeline> {
 // Bounded FIFO queue — at most `concurrency` pipeline calls in flight
 // ---------------------------------------------------------------------------
 
-interface QueueEntry<T> {
-    task: () => Promise<T>;
-    resolve: (value: T) => void;
+interface QueueEntry {
+    task: () => Promise<unknown>;
+    resolve: (value: unknown) => void;
     reject: (reason: unknown) => void;
 }
 
-class BoundedQueue<T> {
-    private readonly entries: QueueEntry<T>[] = [];
+class BoundedQueue {
+    private readonly entries: QueueEntry[] = [];
     private active = 0;
 
     constructor(private readonly concurrency: number) {}
 
-    run(task: () => Promise<T>): Promise<T> {
-        return new Promise<T>((resolve, reject) => {
-            this.entries.push({ task, resolve, reject });
+    run<U>(task: () => Promise<U>): Promise<U> {
+        return new Promise<U>((resolve, reject) => {
+            this.entries.push({
+                task,
+                resolve: resolve as (value: unknown) => void,
+                reject,
+            });
             this.pump();
         });
     }
 
     private pump(): void {
         while (this.active < this.concurrency && this.entries.length > 0) {
-            const entry = this.entries.shift() as QueueEntry<T>;
+            const entry = this.entries.shift() as QueueEntry;
             this.active += 1;
             entry
                 .task()
@@ -187,9 +196,7 @@ class BoundedQueue<T> {
     }
 }
 
-const inferenceQueue = new BoundedQueue<Float32Array>(
-    semanticEnv.SEMANTIC_MAX_CONCURRENT_EMBEDDINGS,
-);
+const inferenceQueue = new BoundedQueue(semanticEnv.SEMANTIC_MAX_CONCURRENT_EMBEDDINGS);
 
 // ---------------------------------------------------------------------------
 // Embedding
@@ -247,6 +254,63 @@ async function embedText(rawText: string, label: string): Promise<Float32Array> 
     });
 }
 
+/**
+ * Batched passage embedding: ONE pipeline call across all texts (returned in
+ * input order). The runtime's feature-extraction accepts `string[]`, which is
+ * far cheaper than N serialized single-text calls. Callers must never feed an
+ * empty array (an empty batch is a programming error, not a user error).
+ */
+async function embedTexts(rawTexts: string[], labels: string[]): Promise<Float32Array[]> {
+    const extractor = await lazyExtractor();
+    return inferenceQueue.run(async () => {
+        try {
+            const tensor = await extractor(rawTexts, {
+                pooling: 'mean',
+                normalize: true,
+            });
+            const dims = tensor.dims;
+            if (dims.length !== 2 || dims[0] !== rawTexts.length || dims[1] !== SEMANTIC_DIM) {
+                throw new SemanticSearchError(
+                    'EMBEDDING_FAILED',
+                    `Expected model output [${rawTexts.length}, ${SEMANTIC_DIM}], ` +
+                        `got [${dims.join(', ')}] for batch "${labels[0] ?? ''}...". ` +
+                        `Artifact may be corrupted; re-run \`pnpm semantic:prefetch\`.`,
+                );
+            }
+            const flat = tensor.data as Float32Array;
+            const out: Float32Array[] = [];
+            for (let i = 0; i < rawTexts.length; i += 1) {
+                const vector = new Float32Array(SEMANTIC_DIM);
+                vector.set(flat.subarray(i * SEMANTIC_DIM, (i + 1) * SEMANTIC_DIM));
+                let sumSquares = 0;
+                for (let d = 0; d < vector.length; d += 1) {
+                    sumSquares += vector[d] * vector[d];
+                }
+                const norm = Math.sqrt(sumSquares);
+                if (norm < 1e-3 || Math.abs(norm - 1) > 1e-2) {
+                    throw new SemanticSearchError(
+                        'EMBEDDING_FAILED',
+                        `Embedding for "${labels[i] ?? ''}" has L2 norm ${norm.toFixed(4)} (expected ~1). ` +
+                            `Artifact/contract mismatch; re-run \`pnpm semantic:prefetch\`.`,
+                    );
+                }
+                out.push(vector);
+                // ONE embedding computed per output vector, not per batch: a
+                // batch of N passages produced N vectors.
+                semanticSearchMetrics.recordEmbeddingComputed();
+            }
+            return out;
+        } catch (err) {
+            if (err instanceof SemanticSearchError) throw err;
+            throw new SemanticSearchError(
+                'EMBEDDING_FAILED',
+                `Feature extraction failed for a batch of ${rawTexts.length} passages.`,
+                err,
+            );
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Public runtime
 // ---------------------------------------------------------------------------
@@ -259,6 +323,11 @@ export interface EmbeddingRuntime {
      * absent (canonical documents already carry it).
      */
     embedPassage(text: string): Promise<Float32Array>;
+    /**
+     * Embed many passages with ONE pipeline call (index refresh). Prefixes are
+     * applied per text exactly like `embedPassage`. Input order is preserved.
+     */
+    embedPassages(texts: string[]): Promise<Float32Array[]>;
     /** True once the singleton model has loaded (test/ops seam). */
     isLoaded(): boolean;
     /** Load the model eagerly; subsequent calls are no-ops. */
@@ -279,6 +348,16 @@ class SingletonEmbeddingRuntime implements EmbeddingRuntime {
             ? text
             : `${SEMANTIC_PASSAGE_PREFIX} ${text}`;
         return embedText(prefixed, text);
+    }
+
+    async embedPassages(texts: string[]): Promise<Float32Array[]> {
+        if (texts.length === 0) {
+            throw new SemanticSearchError('INVALID_ARGS', 'Cannot embed an empty batch.');
+        }
+        const prefixed = texts.map((t) =>
+            t.startsWith(`${SEMANTIC_PASSAGE_PREFIX} `) ? t : `${SEMANTIC_PASSAGE_PREFIX} ${t}`,
+        );
+        return embedTexts(prefixed, texts);
     }
 
     isLoaded(): boolean {

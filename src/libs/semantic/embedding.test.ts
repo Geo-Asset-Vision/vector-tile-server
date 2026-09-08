@@ -58,6 +58,28 @@ function installPipelineMock() {
     return extractor;
 }
 
+/** Batch-capable extractor: string[] input returns [N, 384] tensor rows. */
+function installBatchPipelineMock() {
+    const extractor = vi.fn(
+        async (texts: string | string[]) =>
+            Array.isArray(texts)
+                ? {
+                      dims: [texts.length, SEMANTIC_DIM] as number[],
+                      data: (() => {
+                          const out = new Float32Array(texts.length * SEMANTIC_DIM);
+                          for (let i = 0; i < texts.length; i += 1) {
+                              const single = fakeExtractor(texts[i] as string);
+                              out.set(single.data, i * SEMANTIC_DIM);
+                          }
+                          return out;
+                      })(),
+                  }
+                : fakeExtractor(texts),
+    );
+    pipelineMock.mockResolvedValue(extractor);
+    return extractor;
+}
+
 /** Create a fake model dir with all artifacts present; point the runtime at it. */
 function pointAtModelDir(root: string): string {
     const full = path.join(root, MODEL_ID);
@@ -152,6 +174,53 @@ describe('embedding runtime — mocked seam', () => {
         // env.localModelPath strips the model id tail: models/Xenova/e5 -> models/
         expect(envMock.localModelPath).toBe(path.dirname(path.dirname(full)));
         expect(envMock.useFSCache).toBe(false);
+    });
+
+    it('embedPassages batches a whole refresh delta in ONE pipeline call', async () => {
+        pointAtModelDir(modelRoot);
+        const extractor = installBatchPipelineMock();
+
+        const rt = getEmbeddingRuntime();
+        const texts = ['layer: a.roads.geom', 'passage: layer: b.parcels.geom', 'layer: c.rivers.geom'];
+        const out = await rt.embedPassages(texts);
+
+        expect(pipelineMock).toHaveBeenCalledTimes(1); // model loaded once
+        expect(out).toHaveLength(3);
+        for (const v of out) {
+            expect(v).toHaveLength(SEMANTIC_DIM);
+            expect(v).toBeInstanceOf(Float32Array);
+        }
+        // ONE extractor call with the whole batch; the already-prefixed passage
+        // was not double-prefixed.
+        expect(extractor).toHaveBeenCalledTimes(1);
+        const call = extractor.mock.calls[0] as unknown as [string | string[], unknown];
+        expect(Array.isArray(call[0])).toBe(true);
+        const batch = call[0] as string[];
+        expect(batch).toHaveLength(3);
+        expect(batch[0]).toBe('passage: layer: a.roads.geom');
+        expect(batch[1]).toBe('passage: layer: b.parcels.geom'); // no double prefix
+        expect(batch[2]).toBe('passage: layer: c.rivers.geom');
+    });
+
+    it('embedPassages records ONE embedding-computed metric per output vector', async () => {
+        pointAtModelDir(modelRoot);
+        installBatchPipelineMock();
+
+        const { semanticSearchMetrics } = await import('./metrics.js');
+        semanticSearchMetrics.reset();
+
+        const rt = getEmbeddingRuntime();
+        const texts = ['layer: a.geom', 'layer: b.geom', 'layer: c.geom', 'layer: d.geom'];
+        const out = await rt.embedPassages(texts);
+
+        expect(out).toHaveLength(4);
+        // A batch of N passages computed N embeddings — not 1.
+        expect(semanticSearchMetrics.getSnapshot().embeddingsComputed).toBe(4);
+
+        // Single-text path still records exactly once.
+        semanticSearchMetrics.reset();
+        await rt.embedPassage('layer: e.geom');
+        expect(semanticSearchMetrics.getSnapshot().embeddingsComputed).toBe(1);
     });
 });
 

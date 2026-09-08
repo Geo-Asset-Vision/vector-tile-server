@@ -59,6 +59,17 @@ export interface ValkeyLike {
 
 export const SEMANTIC_MANIFEST_KEY = 'sem:manifest' as const;
 
+/** Per-layer metadata persisted with a published version so a later refresh can
+ * skip unchanged layers by fingerprint and retrieval can return typed results. */
+export interface CatalogLayerDetail {
+    /** SHA-256 over the canonical passage + EMBEDDING_CONTRACT (see document.ts). */
+    fingerprint: string;
+    /** PostGIS geometry type, e.g. `Polygon`, `MultiLineStringZ`. */
+    geometryType: string;
+    tableDescription?: string;
+    geometryDescription?: string;
+}
+
 export interface CatalogManifest {
     version: number;
     /** layerIds in the same order they were written; MGET order matches. */
@@ -67,6 +78,9 @@ export interface CatalogManifest {
     publishedAt: string;
     embeddingContract: string;
     sourceFingerprint?: string;
+    /** layerId -> { fingerprint, geometryType, descriptions } (optional for
+     * backwards compatibility; todo-5 refresh always writes it). */
+    layerDetails?: Record<string, CatalogLayerDetail>;
 }
 
 function encodeManifest(m: CatalogManifest): Buffer {
@@ -133,7 +147,11 @@ export class IndexStorage {
     async writeVersion(
         version: number,
         docs: Map<string, Float32Array>,
-        opts: { sourceFingerprint?: string; embeddingContract?: string } = {},
+        opts: {
+            sourceFingerprint?: string;
+            embeddingContract?: string;
+            layerDetails?: Record<string, CatalogLayerDetail>;
+        } = {},
     ): Promise<IndexWriteResult> {
         if (!Number.isSafeInteger(version) || version < 1) {
             return { status: 'invalid', code: 'INVALID_ARGS', message: `version must be a positive integer, got ${String(version)}` };
@@ -199,6 +217,7 @@ export class IndexStorage {
             publishedAt: new Date().toISOString(),
             embeddingContract: opts.embeddingContract ?? '',
             ...(opts.sourceFingerprint ? { sourceFingerprint: opts.sourceFingerprint } : {}),
+            ...(opts.layerDetails ? { layerDetails: opts.layerDetails } : {}),
         };
         const ok = await this.client.setBuffer(SEMANTIC_MANIFEST_KEY, encodeManifest(manifest));
         if (!ok) {
