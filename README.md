@@ -425,7 +425,7 @@ flowchart LR
 
 ### What gets indexed
 
-Refresh (`pnpm semantic:refresh`) traverses every geometry object the tile server serves (`POSTGIS_SCHEMA` scope), builds one canonical document per geometry **layer** (`schema.table.geometry` + geometry type + SRID + descriptions + fields, truncated deterministically at 1500 chars), and stores one 384-dim float32 vector per layer. The published index is **versioned and immutable**:
+Refresh (`pnpm semantic:refresh`) traverses every geometry object the tile server serves (`POSTGIS_SCHEMA` scope) **restricted to the allowlisted catalog surface** (`ALLOWED_SCHEMAS`/`ALLOWED_CATALOGS`; empty = all allowed), builds one canonical document per geometry **layer** (`schema.table.geometry` + geometry type + SRID + descriptions + fields, truncated deterministically at 1500 chars), and stores one 384-dim float32 vector per layer. Every search re-checks each candidate layer against the same allowlist at read time, so layers filtered out of the served surface never rank. The published index is **versioned and immutable**:
 
 - `sem:manifest` — one key holding `{ version, layers[], documentCount, publishedAt, embeddingContract, sourceFingerprint, layerDetails }`.
 - `sem:index:<version>:<schema>.<table>.<geometry>` — one key per layer holding the raw float32 vector.

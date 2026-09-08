@@ -21,6 +21,7 @@ import env from '../src/libs/env.js';
 import { findAllGeomObject, findTableGeomLayers } from '../src/repositories/catalog.repo.js';
 import { SemanticSearchError } from '../src/libs/semantic/contracts.js';
 import { getEmbeddingRuntime, modelContractFingerprint } from '../src/libs/semantic/embedding.js';
+import { isCatalogAllowed } from '../src/libs/map-config.js';
 import { IndexStorage } from '../src/libs/semantic/index-storage.js';
 import { refreshSemanticIndex } from '../src/libs/semantic/refresh.js';
 import { semanticSearchMetrics } from '../src/libs/semantic/metrics.js';
@@ -61,9 +62,11 @@ async function main(): Promise<void> {
                 // Mirror discoverCatalog() so the index covers exactly the
                 // catalogs the tile server serves (schema-scoped by POSTGIS_SCHEMA).
                 const rows = await findAllGeomObject({ schemaName: env.POSTGIS_SCHEMA });
-                // Only geometry columns that the tile server would serve.
+                // Only geometry columns the tile server would serve, then drop
+                // catalogs outside the ALLOWED_SCHEMAS/ALLOWED_CATALOGS allowlist.
                 return rows
                     .filter((r) => Array.isArray(r.geometry_columns) && r.geometry_columns.length > 0)
+                    .filter((r) => isCatalogAllowed(r.schema_name, r.name))
                     .map((r) => ({ schemaName: r.schema_name, tableName: r.name }));
             },
             layers: (schemaName, tableName) => findTableGeomLayers({ schemaName, tableName }),
