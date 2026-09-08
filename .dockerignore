@@ -15,3 +15,7 @@ pnpm-debug.log*
 .DS_Store
 README.md
 vitest.config.ts
+.omo
+.cursor
+.gemini
+.claude

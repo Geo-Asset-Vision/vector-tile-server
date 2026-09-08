@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: false
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: false
   vue-demi: true
 minimumReleaseAgeExclude:
   - hono@4.13.2
